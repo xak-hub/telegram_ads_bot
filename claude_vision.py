@@ -1,19 +1,28 @@
+import asyncio
 import base64
 import json
+import logging
 import os
 import re
 
-import anthropic
-from anthropic import AsyncAnthropic
+from zai import ZhipuAiClient
+from zai.core import (
+    APIResponseError,
+    APIStatusError,
+    APITimeoutError,
+    ZaiError,
+)
 from dotenv import load_dotenv
 
 from retry import retry_async
 
 load_dotenv()
 
-client = AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-5"
+client = ZhipuAiClient(api_key=os.environ.get("ZAI_API_KEY") or os.environ.get("GLM_API_KEY"))
+
+MODEL = "glm-5v-turbo"
 
 SYSTEM_PROMPT = """Ты распознаёшь технические характеристики ноутбука по одному или нескольким \
 изображениям для составления объявления о продаже. Если изображений несколько — это разные \
@@ -120,31 +129,42 @@ def _extract_json(raw_text: str) -> dict:
 
 
 def _is_transient(e: Exception) -> bool:
-    # SDK уже сам повторяет часть сетевых/5xx ошибок (max_retries=2 по умолчанию),
-    # это дополнительная подстраховка сверху плюс повтор при битом JSON от модели —
-    # такое иногда случается и обычно проходит со второго раза.
+    # Битый JSON от модели случается иногда и обычно проходит со второго раза.
     if isinstance(e, json.JSONDecodeError):
         return True
-    if isinstance(e, anthropic.APIStatusError):
-        return e.status_code >= 500 or e.status_code == 429
-    return isinstance(e, (anthropic.APIConnectionError, anthropic.RateLimitError))
+    # Сетевые сбои и таймауты — временные.
+    if isinstance(e, APITimeoutError):
+        return True
+    # APIResponseError — базовый класс сетевых ошибок (включая APIConnectionError,
+    # который не экспортируется из zai.core, но является его подклассом).
+    if isinstance(e, APIResponseError) and not isinstance(e, APIStatusError):
+        return True
+    # Ошибки со статус-кодом: повторяем только 5xx и 429 (рейт-лимит),
+    # клиентские 4xx (auth, неверный запрос) повторять бессмысленно.
+    if isinstance(e, APIStatusError):
+        status = getattr(e, "status_code", None)
+        if status is not None:
+            return status >= 500 or status == 429
+    # Любая другая ошибка SDK — считаем временной, чтобы не падать на
+    # незнакомых типах исключений (SDK может их добавить в будущем).
+    if isinstance(e, ZaiError):
+        return True
+    return False
 
 
 async def analyze_photo(images: list[tuple[bytes, str]], user_note: str) -> dict:
-    user_content = []
+    content = []
     for i, (image_bytes, media_type) in enumerate(images, start=1):
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
-        user_content.append({"type": "text", "text": f"Изображение {i}:"})
-        user_content.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": media_type,
-                "data": image_b64,
+        content.append({"type": "text", "text": f"Изображение {i}:"})
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{media_type};base64,{image_b64}",
             },
         })
 
-    user_content.append({
+    content.append({
         "type": "text",
         "text": (
             f"Подпись пользователя к фото: {user_note}"
@@ -154,13 +174,19 @@ async def analyze_photo(images: list[tuple[bytes, str]], user_note: str) -> dict
     })
 
     async def _call():
-        response = await client.messages.create(
+        # zai-sdk предоставляет только синхронный клиент, поэтому запускаем
+        # блокирующий HTTP-запрос в пуле потоков, чтобы не морозить event loop
+        # aiogram на всё время обращения к GLM.
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model=MODEL,
             max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_content}],
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ],
         )
-        raw_text = "".join(block.text for block in response.content if block.type == "text")
+        raw_text = response.choices[0].message.content
         return _extract_json(raw_text)
 
     return await retry_async(_call, retries=3, is_transient=_is_transient)

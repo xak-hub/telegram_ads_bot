@@ -1,5 +1,6 @@
 aiogram>=3.4,<4
 anthropic>=0.34
+zai-sdk>=0.2
 gspread>=6.0
 python-dotenv>=1.0
 openpyxl>=3.1
