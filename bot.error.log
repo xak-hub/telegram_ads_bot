@@ -1,0 +1,171 @@
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510298 is handled. Duration 63 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510299 is handled. Duration 99 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510300 is handled. Duration 143 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510301 is handled. Duration 156 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510302 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510303 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510304 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510305 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510306 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510307 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510308 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510309 is handled. Duration 58 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510310 is handled. Duration 1773 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510311 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510312 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510313 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510314 is handled. Duration 2 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510315 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510316 is handled. Duration 55 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510317 is handled. Duration 1555 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510318 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510319 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510320 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510321 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510322 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510323 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510324 is handled. Duration 27 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510325 is handled. Duration 22 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510326 is handled. Duration 77 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510327 is handled. Duration 1160 ms by bot id=8949078283
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510328 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510329 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510330 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510331 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510332 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510333 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510334 is handled. Duration 66 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510335 is handled. Duration 1709 ms by bot id=8949078283
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510336 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510337 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510338 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510339 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510340 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510341 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510342 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+INFO:aiogram.event:Update id=64510343 is handled. Duration 74 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510344 is handled. Duration 1236 ms by bot id=8949078283
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510345 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510346 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510347 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510348 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510349 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510350 is handled. Duration 62 ms by bot id=8949078283
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+WARNING:aiogram.dispatcher:Received SIGTERM signal
+INFO:aiogram.dispatcher:Polling stopped for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.dispatcher:Polling stopped
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:aiogram.event:Update id=64510351 is handled. Duration 1 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510352 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510353 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510354 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510355 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510356 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510357 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510358 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510359 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510360 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510361 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510362 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510363 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510364 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510365 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510366 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510367 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510368 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510369 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510370 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510371 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510372 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510373 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:aiogram.event:Update id=64510374 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510375 is handled. Duration 0 ms by bot id=8949078283
+INFO:aiogram.event:Update id=64510376 is handled. Duration 0 ms by bot id=8949078283
+INFO:httpx:HTTP Request: POST https://api.anthropic.com/v1/messages "HTTP/1.1 200 OK"
+WARNING:card_service:fal.ai rembg 403: {"detail": "User is locked. Reason: Exhausted balance. Top up your balance at fal.ai/dashboard/billing."}
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
+INFO:__main__:avito_export.xlsx восстановлен из Yandex Storage
+INFO:aiogram.dispatcher:Start polling
+INFO:aiogram.dispatcher:Run polling for bot @sicanpc_bot id=8949078283 - 'Авитомат'
