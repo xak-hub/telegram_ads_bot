@@ -7,6 +7,7 @@ import re
 
 from zai import ZhipuAiClient
 from zai.core import (
+    APIReachLimitError,
     APIResponseError,
     APIStatusError,
     APITimeoutError,
@@ -139,12 +140,21 @@ def _is_transient(e: Exception) -> bool:
     # который не экспортируется из zai.core, но является его подклассом).
     if isinstance(e, APIResponseError) and not isinstance(e, APIStatusError):
         return True
-    # Ошибки со статус-кодом: повторяем только 5xx и 429 (рейт-лимит),
-    # клиентские 4xx (auth, неверный запрос) повторять бессмысленно.
+    # Рейт-лимит. Z.AI возвращает APIReachLimitError (HTTP 429) и для настоящего
+    # превышения лимита (повторять стоит), и для нехватки средств/квоты на счету
+    # (повторять бессмысленно — код 1113, "余额不足"/insufficient balance).
+    # Второй случай пробрасываем сразу, без пустых ретраев.
+    if isinstance(e, APIReachLimitError):
+        message = str(e)
+        if "1113" in message or "余额不足" in message or "insufficient" in message.lower():
+            return False
+        return True
+    # Прочие ошибки со статус-кодом: повторяем только 5xx,
+    # остальные клиентские 4xx (auth, неверный запрос) повторять бессмысленно.
     if isinstance(e, APIStatusError):
         status = getattr(e, "status_code", None)
         if status is not None:
-            return status >= 500 or status == 429
+            return status >= 500
     # Любая другая ошибка SDK — считаем временной, чтобы не падать на
     # незнакомых типах исключений (SDK может их добавить в будущем).
     if isinstance(e, ZaiError):
