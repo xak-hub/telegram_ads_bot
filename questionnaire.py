@@ -1,4 +1,5 @@
 import re
+from typing import Optional, Union, List
 
 from aiogram import Router, F
 from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -18,6 +19,10 @@ SESSIONS: dict[int, dict] = {}
 
 PRICE_PENDING: set[int] = set()
 ADDRESS_PENDING: set[int] = set()
+
+# Собранные данные объявления, ожидающие подтверждения предпоказа.
+# chat_id -> {"vision","answers","price","address","listing_id","photo_urls","card_bytes"}
+PREVIEW_PENDING: dict[int, dict] = {}
 
 REQUIRED_COLUMNS = {f["avito_column"] for f in FIELDS if f["required"]}
 
@@ -82,7 +87,7 @@ def build_field_keyboard(step: int, chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_flat_keyboard(chat_id: int) -> InlineKeyboardMarkup | None:
+def build_flat_keyboard(chat_id: int) -> Optional[InlineKeyboardMarkup]:
     """Для объявления: поля, заполненные константами по умолчанию, скрыты совсем.
     Остальные показываются сразу с вариантами-кнопками (без захода в подменю) и
     остаются на экране после выбора — просто отмечаются галочкой, чтобы можно
@@ -124,7 +129,7 @@ _COLOR_SYNONYMS = {
 }
 
 
-def _normalize_color(raw: str) -> str | None:
+def _normalize_color(raw: str) -> Optional[str]:
     if not raw:
         return None
     return _COLOR_SYNONYMS.get(raw.strip().lower())
@@ -135,7 +140,7 @@ _RAM_SIZE_FIELD = next(f for f in FIELDS if f["key"] == "ram_size")
 _OS_FIELD = next(f for f in FIELDS if f["key"] == "os")
 
 
-def _normalize_number(raw: str, allowed_options: list[str]) -> str | None:
+def _normalize_number(raw: str, allowed_options: List[str]) -> Optional[str]:
     """Достаёт число из текста вроде "16 ГБ"/"16GB"/"16" и проверяет, что оно
     входит в список разрешённых значений — иначе не подставляем, пусть выберут сами."""
     if not raw:
@@ -147,7 +152,7 @@ def _normalize_number(raw: str, allowed_options: list[str]) -> str | None:
     return value if value in allowed_options else None
 
 
-def _normalize_price(raw: str) -> int | None:
+def _normalize_price(raw: str) -> Optional[int]:
     """Достаёт цену из текста вроде "299 990 ₽"/"299990" — только если Claude
     реально увидел цену на скриншоте стороннего объявления."""
     if not raw:
@@ -177,7 +182,7 @@ _OS_SYNONYMS = {
 }
 
 
-def _normalize_os(raw: str) -> str | None:
+def _normalize_os(raw: str) -> Optional[str]:
     if not raw:
         return None
     key = raw.strip().lower()
@@ -213,7 +218,8 @@ def _detect_answers(vision_result: dict) -> dict:
     return detected
 
 
-async def start_questionnaire(message, vision_result: dict, listing_id: str, photo_urls: list[str]):
+async def start_questionnaire(message, vision_result: dict, listing_id: str, photo_urls: List[str],
+                              card_bytes: Optional[bytes] = None):
     chat_id = message.chat.id
     defaults = load_defaults()
     answers = dict(defaults)
@@ -231,6 +237,7 @@ async def start_questionnaire(message, vision_result: dict, listing_id: str, pho
         "multi_current": {},
         "listing_id": listing_id,
         "photo_urls": photo_urls,
+        "card_bytes": card_bytes,
         "hub_message_id": None,
         "price_asked": False,
     }
@@ -366,6 +373,54 @@ async def handle_done(callback: CallbackQuery):
     await callback.answer()
     await callback.message.edit_reply_markup()
     await ask_price(callback.message, chat_id)
+
+
+# --- Предпоказ перед публикацией: ✅ Да / ✏️ Редактировать / ✖ Отмена ---
+@router.callback_query(F.data.startswith("pub:"))
+async def handle_publish_decision(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    action = callback.data.split(":", 1)[1]
+    pending = PREVIEW_PENDING.pop(chat_id, None)
+
+    if action == "no":
+        SESSIONS.pop(chat_id, None)
+        await callback.answer("Объявление отменено")
+        try:
+            await callback.message.edit_text("✖ Объявление отменено, данные не опубликованы.")
+        except Exception:
+            await callback.message.answer("✖ Объявление отменено, данные не опубликованы.")
+        return
+
+    if not pending:
+        await callback.answer("Предпоказ устарел, начни заново с фото.", show_alert=True)
+        return
+
+    if action == "edit":
+        # Возвращаем пользователя к правке полей анкеты: показываем новую
+        # хаб-клавиатуру отдельным сообщением. PREVIEW_PENDING уже вычищен выше,
+        # сессия анкеты снова активна в SESSIONS.
+        session = SESSIONS.get(chat_id)
+        if not session:
+            await callback.answer("Сессия устарела, пришли фото заново.", show_alert=True)
+            return
+        await callback.answer()
+        hub = await callback.message.answer("✏️ Что поправим?", reply_markup=build_hub_keyboard(chat_id))
+        session["hub_message_id"] = hub.message_id
+        return
+
+    # action == "yes" — публикуем.
+    SESSIONS.pop(chat_id, None)
+    await callback.answer()
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+    await callback.message.answer("📦 Публикую объявление...")
+    await finalize_listing(
+        callback.message,
+        pending["vision"], pending["answers"], pending["price"], pending["address"],
+        pending["listing_id"], pending.get("photo_urls") or [],
+    )
 
 
 @router.callback_query(F.data.startswith("av:"))
@@ -526,7 +581,7 @@ def _build_ad_text(vision: dict, answers: dict, price: str) -> str:
 
 
 async def finalize_listing(message, vision: dict, answers: dict, price: str, address: str,
-                            listing_id: str, photo_urls: list[str] | None = None):
+                            listing_id: str, photo_urls: Optional[List[str]] = None):
     photo_urls = photo_urls or []
     params = vision.get("parameters", {})
 
@@ -568,16 +623,72 @@ async def finalize_listing(message, vision: dict, answers: dict, price: str, add
 
 
 async def finish_questionnaire(message, chat_id: int, price: str, address: str):
-    session = SESSIONS.pop(chat_id)
+    """Финал анкеты: показываем предпоказ (карточка + сводка + кнопки) и НЕ
+    публикуем сразу — пользователь подтверждает через pub:yes / правит pub:edit
+    / отменяет pub:no. Сессию из SESSIONS не вычищаем до подтверждения, чтобы
+    pub:edit мог вернуть клавиатуру правки."""
+    session = SESSIONS.get(chat_id)
+    if not session:
+        await message.answer("Сессия устарела. Пришли фото заново.")
+        return
     hub_message_id = session.get("hub_message_id")
     if hub_message_id:
         try:
             await message.bot.edit_message_reply_markup(chat_id=chat_id, message_id=hub_message_id)
         except Exception:
             pass
+
     p = session["vision"].get("parameters", {})
     listing_id = make_listing_id(model=p.get("model", ""), cpu=p.get("cpu", ""), price=price)
-    await finalize_listing(
-        message, session["vision"], session["answers"], price, address,
-        listing_id, session.get("photo_urls") or [],
-    )
+
+    PREVIEW_PENDING[chat_id] = {
+        "vision": session["vision"],
+        "answers": session["answers"],
+        "price": price,
+        "address": address,
+        "listing_id": listing_id,
+        "photo_urls": session.get("photo_urls") or [],
+        "card_bytes": session.get("card_bytes"),
+    }
+
+    summary = _preview_summary(session["vision"], session["answers"], price, address)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Да, размещаем", callback_data="pub:yes"),
+        InlineKeyboardButton(text="✏️ Редактировать", callback_data="pub:edit"),
+        InlineKeyboardButton(text="✖ Отмена", callback_data="pub:no"),
+    ]])
+
+    card_bytes = session.get("card_bytes")
+    caption = f"📋 Проверьте объявление перед публикацией:\n\n{summary}"
+    try:
+        if card_bytes:
+            from aiogram.types import BufferedInputFile
+            await message.answer_photo(
+                BufferedInputFile(card_bytes, filename="card.png"),
+                caption=caption, reply_markup=keyboard)
+        else:
+            await message.answer(caption, reply_markup=keyboard)
+    except Exception:
+        # Если фото не отправилось — покажем хотя бы текст с кнопками.
+        await message.answer(caption, reply_markup=keyboard)
+
+
+def _preview_summary(vision: dict, answers: dict, price: str, address: str) -> str:
+    p = vision.get("parameters", {})
+    title = f"{p.get('brand','').strip()} {p.get('model','').strip()}".strip() or "Ноутбук"
+    bits = []
+    if p.get("screen_size"):
+        bits.append(f'Экран {p["screen_size"]}"')
+    if p.get("cpu"):
+        bits.append(p["cpu"])
+    if p.get("ram_gb"):
+        bits.append(f"{p['ram_gb']} ГБ ОЗУ")
+    if p.get("storage_gb"):
+        bits.append(f"{round_storage(p['storage_gb'])} ГБ SSD")
+    lines = [f"📷 {title}"]
+    if bits:
+        lines.append("⚙ " + " · ".join(bits))
+    lines.append(f"💵 Цена: {price} ₽")
+    if address:
+        lines.append(f"📍 {address}")
+    return "\n".join(lines)

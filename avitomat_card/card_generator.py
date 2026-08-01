@@ -1,13 +1,12 @@
 """
 card_generator.py — генерация карточки товара для объявлений (Avito, 1280x960).
 
-Финальный дизайн, согласованный в чате:
-- Вертикальный градиент фона (светло-серый сверху -> тёмно-серый снизу)
-- Заголовок по центру
-- Логотип сверху справа (без эффектов)
-- Характеристики (сетка 2x2) под заголовком — текст прямо на фоне, без подложек
-- Фото товара (с прозрачным фоном) по центру, максимального размера
-- Пункты доверия (иконка + текст) в одну линию под фото
+Горизонтальная карточка 4:3 (не обрезается в выдаче Авито). Композиция:
+- Левая колонка (~45% ширины): вырезанное фото товара по центру, с мягкой тенью.
+- Правая колонка (~55% ширины): логотип сверху, заголовок (бренд+модель),
+  характеристики вертикальным списком (иконка+текст), пункты доверия снизу.
+- Вертикальный градиент фона (светло-серый сверху -> тёмно-серый снизу).
+- Без цены (цена только в тексте объявления).
 
 Использование:
 
@@ -31,21 +30,19 @@ card_generator.py — генерация карточки товара для о
     ))
 
 Важно: product_cutout_path должен быть PNG с ПРОЗРАЧНЫМ фоном (товар уже вырезан).
-Если у вас есть только исходное фото на обычном фоне — сначала прогоните его через
-background_removal.remove_background() из соседнего модуля.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # ---------------------------------------------------------------------------
-# Константы дизайна (фиксированный, согласованный стиль — менять с осторожностью)
+# Константы дизайна
 # ---------------------------------------------------------------------------
 
-CANVAS_W, CANVAS_H = 1280, 1080
+CANVAS_W, CANVAS_H = 1280, 960
 
 ASSETS_DIR = Path(__file__).parent / "assets"
 FONT_BOLD_PATH = str(ASSETS_DIR / "fonts" / "Roboto-Bold.ttf")
@@ -56,30 +53,42 @@ GRADIENT_TOP = (250, 250, 252)      # светло-серый верх
 GRADIENT_BOTTOM = (150, 152, 157)   # тёмно-серый низ
 
 TITLE_COLOR = (82, 33, 33)          # тёмно-бордовый #522121
-BADGE_TEXT_COLOR = (222, 222, 222)  # светло-серый — пункты доверия
+BADGE_TEXT_COLOR = (236, 236, 236)  # светло-серый — пункты доверия
 SPEC_TEXT_COLOR = (44, 62, 80)      # #2C3E50 — текст характеристик
 
-TITLE_FONT_SIZE = 77
-TITLE_TOP_MARGIN = 40
-BADGE_FONT_SIZE = 26
-SPEC_FONT_SIZE = 32
+# Раскладка колонок.
+LEFT_COL_W = int(CANVAS_W * 0.45)   # левая колонка = фото товара
+RIGHT_COL_X = LEFT_COL_W + 24       # правая колонка = текст, с отступом от левой
+RIGHT_COL_W = CANVAS_W - RIGHT_COL_X - 36
 
-LOGO_HEIGHT = 92
-LOGO_MARGIN_RIGHT = 32
+# Шрифты.
+TITLE_FONT_SIZE = 60
+SPEC_FONT_SIZE = 30
+SPEC_LABEL_FONT_SIZE = 24
+BADGE_FONT_SIZE = 22
 
-BADGE_ICON_SIZE = 38
-BADGE_ROW_HEIGHT = 64
-BADGE_GAP = 32  # расстояние между пунктами доверия в общей линии
+# Логотип.
+LOGO_HEIGHT = 70
+LOGO_TOP = 36
 
-SPEC_ROW_H = 46
-SPEC_ROW_GAP = 16
-SPEC_COL_INNER_GAP = 80  # зазор между двумя колонками характеристик
-SPEC_COL2_EXTRA_SHIFT = 75  # доп. сдвиг правой колонки вправо (~4 символа)
-SPEC_GRID_X0, SPEC_GRID_X1 = 36, 1244  # используется для центрирования пунктов доверия
-BOTTOM_MARGIN = 8
+# Геометрия текстовых блоков правой колонки.
+TITLE_TOP = LOGO_TOP + LOGO_HEIGHT + 36
+TITLE_LINE_GAP = 8     # межстрочный интервал заголовка при переносе
+TITLE_BOTTOM_GAP = 28  # отступ от заголовка до характеристик
 
-PRODUCT_AREA_WIDTH_BUDGET = 1180  # с запасом от краёв канваса (1280), чтобы товар не упирался в них
-PRODUCT_OFFSET_X = 20  # сдвиг фото товара вправо от центра
+# Характеристики — вертикальный список, иконка + (значение крупно + подпис мелко).
+SPEC_ICON_SIZE = 48
+SPEC_ROW_GAP = 26
+SPEC_VALUE_TOP_PAD = 0     # выравнивание значения относительно иконки
+SPEC_LABEL_GAP = 6         # отступ подписи от значения
+
+# Пункты доверия — внизу правой колонки.
+BADGE_ICON_SIZE = 34
+BADGE_BOTTOM = 28
+BADGE_ROW_GAP = 14  # по вертикали между пунктами (если не влезают в строку)
+
+# Товар в левой колонке.
+PRODUCT_AREA_PADDING = 60  # отступ фото от границ левой колонки
 
 
 # ---------------------------------------------------------------------------
@@ -88,23 +97,36 @@ PRODUCT_OFFSET_X = 20  # сдвиг фото товара вправо от це
 
 @dataclass
 class Badge:
-    """Один пункт доверия: иконка (путь к PNG с прозрачным фоном) + текст в одну строку."""
+    """Один пункт доверия: иконка (путь к PNG с прозрачным фоном) + текст."""
     icon_path: str
     text: str
 
 
 @dataclass
 class Spec:
-    """Одна характеристика в сетке 2x2: иконка (PNG с прозрачным фоном) + текст."""
+    """Одна характеристика: иконка + значение (крупно) + необязательная подпись (мелко).
+
+    Если text содержит двоеточие или перевод строки — всё после первого разделителя
+    считается подписью (мелким шрифтом под значением). Иначе подписи нет.
+    """
     icon_path: str
     text: str
+
+    def split_value_label(self) -> Tuple[str, str]:
+        """Разделяет 'Экран 14"' -> ('Экран 14"', '') или
+        'Экран: 14"' -> ('Экран', '14"'). Используем '|'-разделитель в тексте,
+        чтобы caller мог задать пару явно."""
+        if "|" in self.text:
+            value, label = self.text.split("|", 1)
+            return value.strip(), label.strip()
+        return self.text.strip(), ""
 
 
 @dataclass
 class CardConfig:
     product_cutout_path: str
     title: str
-    specs: List[Spec]                      # ровно 4 штуки — сетка 2x2
+    specs: List[Spec]                      # рекомендуется 4 штуки
     badges: List[Badge]
     output_path: str
     logo_path: str = DEFAULT_LOGO_PATH
@@ -132,9 +154,7 @@ def _linear_gradient_v(size, top, bottom):
 
 
 def _load_icon(path, size):
-    """Обрезает иконку по реальному содержимому (без прозрачных полей) и
-    вписывает в квадрат size x size — так иконки с разным исходным паддингом
-    выглядят одного визуального размера."""
+    """Обрезает иконку по реальному содержимому и вписывает в квадрат size x size."""
     im = Image.open(path).convert("RGBA")
     bbox = im.getbbox()
     if bbox:
@@ -147,16 +167,51 @@ def _load_icon(path, size):
     return square
 
 
+def _fit_font(text: str, font_path: str, start_size: int, max_w: int,
+              min_size: int = 22) -> ImageFont.FreeTypeFont:
+    """Уменьшает размер шрифта, пока текст не влезает в max_w."""
+    size = start_size
+    font = ImageFont.truetype(font_path, size)
+    while size > min_size and font.getlength(text) > max_w:
+        size -= 2
+        font = ImageFont.truetype(font_path, size)
+    return font
+
+
+def _wrap_title(draw, text, font_path, font_size, max_w, line_gap):
+    """Переносит заголовок по словам; при необходимости уменьшает шрифт так,
+    чтобы самое длинное слово влезало. Возвращает (font, list_of_lines)."""
+    words = text.split()
+    font_size = font_size
+    while font_size > 22:
+        font = ImageFont.truetype(font_path, font_size)
+        lines, cur = [], ""
+        ok = True
+        for w in words:
+            trial = (cur + " " + w).strip()
+            if font.getlength(trial) <= max_w or not cur:
+                cur = trial
+            else:
+                lines.append(cur)
+                cur = w
+                if len(lines) >= 3:  # не больше 3 строк
+                    ok = False
+                    break
+        if ok:
+            if cur:
+                lines.append(cur)
+            return font, lines
+        font_size -= 3
+    font = ImageFont.truetype(font_path, font_size)
+    return font, [text]
+
+
 # ---------------------------------------------------------------------------
 # Основная функция
 # ---------------------------------------------------------------------------
 
 def generate_card(config: CardConfig) -> str:
-    """Собирает карточку товара и сохраняет по config.output_path.
-    Возвращает путь к сохранённому файлу."""
-
-    if len(config.specs) != 4:
-        raise ValueError("specs должен содержать ровно 4 строки (сетка 2x2)")
+    """Собирает горизонтальную карточку 1280x960 и сохраняет по config.output_path."""
 
     W, H = config.canvas_size
 
@@ -164,116 +219,134 @@ def generate_card(config: CardConfig) -> str:
     canvas = bg.convert("RGBA")
     draw = ImageDraw.Draw(canvas)
 
-    # ---- ширина элементов блока характеристик (по фактическому контенту) ----
-    spec_font = ImageFont.truetype(FONT_THIN_PATH, SPEC_FONT_SIZE)
-    spec_icon_imgs = [_load_icon(s.icon_path, BADGE_ICON_SIZE) for s in config.specs]
+    # ===================== ЛЕВАЯ КОЛОНКА: ТОВАР ============================
+    cut = Image.open(config.product_cutout_path).convert("RGBA")
+    cut = cut.crop(cut.getbbox()) if cut.getbbox() else cut
 
-    spec_item_widths = []
-    for spec in config.specs:
-        tb2 = draw.textbbox((0, 0), spec.text, font=spec_font)
-        spec_item_widths.append(BADGE_ICON_SIZE + 14 + (tb2[2] - tb2[0]))
-    col0_w = max(spec_item_widths[0], spec_item_widths[2])
-    col1_w = max(spec_item_widths[1], spec_item_widths[3])
+    area_x0 = PRODUCT_AREA_PADDING
+    area_y0 = PRODUCT_AREA_PADDING
+    area_x1 = LEFT_COL_W - 20
+    area_y1 = H - PRODUCT_AREA_PADDING
+    area_w = area_x1 - area_x0
+    area_h = area_y1 - area_y0
+    scale = min(area_w / cut.width, area_h / cut.height)
+    cut_r = cut.resize((int(cut.width * scale), int(cut.height * scale)), Image.LANCZOS)
+    prod_x = area_x0 + (area_w - cut_r.width) // 2
+    prod_y = area_y0 + (area_h - cut_r.height) // 2
 
-    # ---- заголовок — размер и позиция считаются первыми (не помещается в
-    # канвас — уменьшаем), логотип и характеристики выравниваются по нему ----
-    title_max_w = W - 2 * SPEC_GRID_X0
-    title_font = ImageFont.truetype(FONT_BOLD_PATH, TITLE_FONT_SIZE)
-    tb = draw.textbbox((0, 0), config.title, font=title_font)
-    tw = tb[2] - tb[0]
-    title_size = TITLE_FONT_SIZE
-    while tw > title_max_w and title_size > 24:
-        title_size -= 2
-        title_font = ImageFont.truetype(FONT_BOLD_PATH, title_size)
-        tb = draw.textbbox((0, 0), config.title, font=title_font)
-        tw = tb[2] - tb[0]
-    title_x0 = (W - tw) / 2
-    title_h = tb[3] - tb[1]
-    title_center_y = TITLE_TOP_MARGIN + tb[1] + title_h / 2
-
-    # ---- логотип сверху справа — по горизонтали (центру) вровень с заголовком ----
-    logo_raw = Image.open(config.logo_path).convert("RGBA")
-    logo_raw = logo_raw.crop(logo_raw.getbbox())
-    logo_small = logo_raw.resize(
-        (int(logo_raw.width * LOGO_HEIGHT / logo_raw.height), LOGO_HEIGHT), Image.LANCZOS)
-    logo_x = W - LOGO_MARGIN_RIGHT - logo_small.width
-    logo_y = title_center_y - LOGO_HEIGHT / 2 - 12
-    canvas.alpha_composite(logo_small, (int(logo_x), int(logo_y)))
-
-    draw.text((title_x0, TITLE_TOP_MARGIN), config.title, font=title_font, fill=TITLE_COLOR)
-    title_bottom = TITLE_TOP_MARGIN + title_h + 10
-
-    # ---- блок характеристик — левый край вровень с левым краем заголовка ----
-    spec_col_x = [title_x0, title_x0 + col0_w + SPEC_COL_INNER_GAP + SPEC_COL2_EXTRA_SHIFT]
-
-    # ---- геометрия: характеристики теперь под заголовком (сверху), пункты
-    # доверия — внизу; фото занимает всё, что остаётся между ними ----
-    specs_h = 2 * SPEC_ROW_H + SPEC_ROW_GAP
-    specs_top = title_bottom + 35
-    badges_h = BADGE_ROW_HEIGHT
-    badges_top = H - BOTTOM_MARGIN - badges_h
-
-    photo_top = specs_top + specs_h + 20
-    photo_bottom = badges_top - 20
-    product_area_h = photo_bottom - photo_top
-
-    # ---- характеристики (иконка+текст прямо на фоне, без подложек) ----
-    for i, (spec_icon, spec) in enumerate(zip(spec_icon_imgs, config.specs)):
-        col, row = i % 2, i // 2
-        x0 = spec_col_x[col]
-        y0 = specs_top + row * (SPEC_ROW_H + SPEC_ROW_GAP)
-
-        icon_y = y0 + (SPEC_ROW_H - BADGE_ICON_SIZE) / 2
-        canvas.alpha_composite(spec_icon, (int(x0), int(icon_y)))
-        tb2 = draw.textbbox((0, 0), spec.text, font=spec_font)
-        th2 = tb2[3] - tb2[1]
-        draw.text((x0 + BADGE_ICON_SIZE + 14, y0 + (SPEC_ROW_H - th2) / 2 - tb2[1]),
-                   spec.text, font=spec_font, fill=SPEC_TEXT_COLOR)
-
-    # ---- фото товара (по центру, максимальный размер) ----
-    cut_master = Image.open(config.product_cutout_path).convert("RGBA")
-    cut_master = cut_master.crop(cut_master.getbbox())
-    scale = min(PRODUCT_AREA_WIDTH_BUDGET / cut_master.width, product_area_h / cut_master.height)
-    cut_resized = cut_master.resize(
-        (int(cut_master.width * scale), int(cut_master.height * scale)), Image.LANCZOS)
-    prod_x = (W - cut_resized.width) // 2 + PRODUCT_OFFSET_X
-    prod_x = max(0, min(prod_x, W - cut_resized.width))
-    prod_y = photo_top + (product_area_h - cut_resized.height) // 2
-
-    shadow_shape = Image.new("RGBA", cut_resized.size, (0, 0, 0, 100))
-    shadow_shape.putalpha(cut_resized.split()[3])
+    # Мягкая тень под товаром.
+    shadow_shape = Image.new("RGBA", cut_r.size, (0, 0, 0, 110))
+    shadow_shape.putalpha(cut_r.split()[3])
     shadow_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    shadow_layer.paste(shadow_shape, (prod_x, prod_y + 22), shadow_shape)
-    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(18))
+    shadow_layer.paste(shadow_shape, (prod_x, prod_y + 26), shadow_shape)
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(20))
     canvas.alpha_composite(shadow_layer)
-    canvas.alpha_composite(cut_resized, (prod_x, prod_y))
+    canvas.alpha_composite(cut_r, (prod_x, prod_y))
 
-    # ---- пункты доверия: все в одну линию — под фото. Раскладка по фактической
-    # ширине текста (не фиксированные колонки), иначе длинные пункты вылезают
-    # за край, а короткие оставляют некрасивые пустоты ----
-    badge_font = ImageFont.truetype(FONT_THIN_PATH, BADGE_FONT_SIZE)
-    icon_imgs = [_load_icon(b.icon_path, BADGE_ICON_SIZE) for b in config.badges]
+    # ===================== ПРАВАЯ КОЛОНКА: ЛОГОТИП =========================
+    logo_raw = Image.open(config.logo_path).convert("RGBA")
+    logo_raw = logo_raw.crop(logo_raw.getbbox()) if logo_raw.getbbox() else logo_raw
+    logo = logo_raw.resize(
+        (int(logo_raw.width * LOGO_HEIGHT / logo_raw.height), LOGO_HEIGHT), Image.LANCZOS)
+    canvas.alpha_composite(logo, (RIGHT_COL_X, LOGO_TOP))
 
-    item_widths = []
-    for badge in config.badges:
-        tb2 = draw.textbbox((0, 0), badge.text, font=badge_font)
-        item_widths.append(BADGE_ICON_SIZE + 14 + (tb2[2] - tb2[0]))
+    # ===================== ПРАВАЯ КОЛОНКА: ЗАГОЛОВОК =======================
+    title_font, title_lines = _wrap_title(
+        draw, config.title, FONT_BOLD_PATH, TITLE_FONT_SIZE, RIGHT_COL_W, TITLE_LINE_GAP)
+    title_y = TITLE_TOP
+    line_h = title_font.size + TITLE_LINE_GAP
+    for line in title_lines:
+        draw.text((RIGHT_COL_X, title_y), line, font=title_font, fill=TITLE_COLOR)
+        title_y += line_h
+    specs_top = title_y + TITLE_BOTTOM_GAP
 
-    row_w = sum(item_widths) + BADGE_GAP * (len(config.badges) - 1)
-    available_w = SPEC_GRID_X1 - SPEC_GRID_X0
-    x = SPEC_GRID_X0 + max(0, (available_w - row_w) / 2)
+    # ===================== ПРАВАЯ КОЛОНКА: ХАРАКТЕРИСТИКИ ==================
+    spec_icon_imgs = [_load_icon(s.icon_path, SPEC_ICON_SIZE) for s in config.specs]
+    value_font = ImageFont.truetype(FONT_BOLD_PATH, SPEC_FONT_SIZE)
+    label_font = ImageFont.truetype(FONT_THIN_PATH, SPEC_LABEL_FONT_SIZE)
 
-    for icon_img, badge, item_w in zip(icon_imgs, config.badges, item_widths):
-        canvas.alpha_composite(icon_img, (int(x), int(badges_top)))
-        tb2 = draw.textbbox((0, 0), badge.text, font=badge_font)
-        th2 = tb2[3] - tb2[1]
-        draw.text((x + BADGE_ICON_SIZE + 14, badges_top + (BADGE_ICON_SIZE - th2) / 2 - tb2[1]),
-                   badge.text, font=badge_font, fill=BADGE_TEXT_COLOR)
-        x += item_w + BADGE_GAP
+    # Зарезервируем место под пункты доверия снизу, чтобы характеристики не
+    # налезли на них при длинных значениях.
+    badges_block_h = _estimate_badges_block_h(config.badges, label_font, H, BADGE_BOTTOM)
+    specs_max_bottom = H - badges_block_h - 20
 
-    # ---- сохранение ----
+    y = specs_top
+    for icon_img, spec in zip(spec_icon_imgs, config.specs):
+        value, label = spec.split_value_label()
+        # Уменьшаем шрифт значения, если оно не влезает в ширину колонки.
+        vfont = _fit_font(value, FONT_BOLD_PATH, SPEC_FONT_SIZE,
+                          RIGHT_COL_W - SPEC_ICON_SIZE - 14)
+        row_h = max(SPEC_ICON_SIZE, vfont.size + (SPEC_LABEL_GAP + label_font.size if label else 0))
+        if y + row_h > specs_max_bottom:
+            break  # не вышло за пределы — обрезаем лишние характеристики
+
+        icon_y = y + (row_h - SPEC_ICON_SIZE) // 2
+        canvas.alpha_composite(icon_img, (RIGHT_COL_X, icon_y))
+
+        tx = RIGHT_COL_X + SPEC_ICON_SIZE + 14
+        vtb = draw.textbbox((0, 0), value, font=vfont)
+        draw.text((tx, y + SPEC_VALUE_TOP_PAD - vtb[1]), value, font=vfont, fill=SPEC_TEXT_COLOR)
+        if label:
+            ltb = draw.textbbox((0, 0), label, font=label_font)
+            draw.text((tx, y + vfont.size + SPEC_LABEL_GAP - ltb[1]), label,
+                      font=label_font, fill=(90, 95, 102))
+        y += row_h + SPEC_ROW_GAP
+
+    # ===================== ПРАВАЯ КОЛОНКА: ПУНКТЫ ДОВЕРИЯ ==================
+    _draw_badges(canvas, draw, config.badges, RIGHT_COL_X, RIGHT_COL_W, H)
+
+    # ===================== СОХРАНЕНИЕ ======================================
     canvas = canvas.convert("RGB")
     out_path = Path(config.output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(out_path, quality=95)
     return str(out_path)
+
+
+def _estimate_badges_block_h(badges, label_font, canvas_h, bottom):
+    """Грубая оценка высоты блока пунктов доверия: пытаемся уложить в 1 строку,
+    иначе в N строк по переносам слов."""
+    if not badges:
+        return 0
+    line_h = max(BADGE_ICON_SIZE, label_font.size) + BADGE_ROW_GAP
+    # Будем считать, что помещается в 3 строки максимум — этого хватит с запасом.
+    return min(len(badges), 3) * line_h + bottom
+
+
+def _draw_badges(canvas, draw, badges, x0, max_w, canvas_h):
+    """Пункты доверия — в нижней части правой колонки. Если не помещаются в одну
+    строку — переносим по одному на строку (иконка + текст)."""
+    if not badges:
+        return
+    badge_font = ImageFont.truetype(FONT_THIN_PATH, BADGE_FONT_SIZE)
+    icon_imgs = [_load_icon(b.icon_path, BADGE_ICON_SIZE) for b in badges]
+
+    # Ширина каждой позиции.
+    item_widths = []
+    for b in badges:
+        tw = draw.textlength(b.text, font=badge_font)
+        item_widths.append(BADGE_ICON_SIZE + 10 + tw)
+
+    total_w = sum(item_widths) + BADGE_ROW_GAP * (len(badges) - 1)
+    if total_w <= max_w:
+        # Одна строка, по центру.
+        x = x0 + max(0, (max_w - total_w) / 2)
+        y = canvas_h - BADGE_BOTTOM - BADGE_ICON_SIZE
+        for icon_img, b, iw in zip(icon_imgs, badges, item_widths):
+            canvas.alpha_composite(icon_img, (int(x), int(y)))
+            th = draw.textbbox((0, 0), b.text, font=badge_font)
+            draw.text((x + BADGE_ICON_SIZE + 10,
+                       y + (BADGE_ICON_SIZE - (th[3] - th[1])) / 2 - th[1]),
+                      b.text, font=badge_font, fill=BADGE_TEXT_COLOR)
+            x += iw + BADGE_ROW_GAP
+    else:
+        # По одному на строку, прижаты к низу.
+        line_h = max(BADGE_ICON_SIZE, badge_font.size) + 6
+        y = canvas_h - BADGE_BOTTOM - line_h * len(badges)
+        for icon_img, b in zip(icon_imgs, badges):
+            canvas.alpha_composite(icon_img, (x0, int(y)))
+            th = draw.textbbox((0, 0), b.text, font=badge_font)
+            draw.text((x0 + BADGE_ICON_SIZE + 10,
+                       y + (BADGE_ICON_SIZE - (th[3] - th[1])) / 2 - th[1]),
+                      b.text, font=badge_font, fill=BADGE_TEXT_COLOR)
+            y += line_h

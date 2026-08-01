@@ -128,6 +128,9 @@ async def _auto_start_later(chat_id: int, anchor_message: Message) -> None:
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     COLLECTING.pop(message.chat.id, None)
+    # Сбрасываем зависшие состояния предпоказа/анкеты, чтобы /start начинал чисто.
+    questionnaire.PREVIEW_PENDING.pop(message.chat.id, None)
+    questionnaire.SESSIONS.pop(message.chat.id, None)
     await message.answer(
         "Пришли фото товара — можно одно, можно несколько по очереди или пачкой. "
         "В любой момент можно дописать текстом детали, которых не видно на фото "
@@ -418,6 +421,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     # Карточка-обложка (только в режиме "Удаление фона + инфа"): убираем фон с
     # выбранного фото (cover_photo), рисуем карточку и ставим её главным
     # (первым) фото объявления. Если не вышло — идём с обычными фото.
+    card_bytes = None
     if mode == "full":
         try:
             if cover_photo:
@@ -455,7 +459,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     # Заголовок объявления на Avito = текст из «Вижу:». Пробрасываем через vision.
     result.setdefault("parameters", {})["title_seen"] = seen
 
-    await questionnaire.start_questionnaire(status, result, listing_id, photo_urls)
+    await questionnaire.start_questionnaire(status, result, listing_id, photo_urls, card_bytes)
 
 
 @dp.message(F.func(lambda m: (
