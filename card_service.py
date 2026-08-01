@@ -1,24 +1,24 @@
 """card_service.py — обработка фото товара для объявления.
 
-Убирает фон с фото через fal.ai (BiRefNet) в двух местах:
+Убирает фон с фото локально через rembg (модель isnet-general-use по умолчанию,
+см. REMBG_MODEL в .env) в двух местах:
 1. Карточка-обложка: вырезанное фото рисуется на брендированной карточке
    модулем avitomat_card, готовая карточка ставится первым (главным) фото.
 2. Остальные фото объявления: тот же вырез кладётся на градиентный фон (как
    у карточки) единого для всех фото размера (по первому фото), с тенью,
    сглаженными краями и логотипом — так все фото объявления выглядят
    единообразно, без исходного фона со стола/фона съёмки.
-Если ключа fal.ai нет или фон убрать не удалось — соответствующее фото (или
-карточка) остаётся как есть, без обработки.
+Если rembg не смог убрать фон для конкретного фото — оно остаётся как есть,
+без обработки; объявление не должно срываться из-за одного неудачного фото.
 """
 
 import asyncio
-import base64
 import io
 import logging
 import os
 import tempfile
+from typing import Optional, Tuple, Union
 
-import aiohttp
 from PIL import Image, ImageFilter
 
 from avitomat_card.card_generator import (
@@ -28,10 +28,12 @@ from avito_row import round_storage
 
 logger = logging.getLogger(__name__)
 
-# fal.ai — удаление фона моделью BiRefNet (значительно лучше базового rembg на
-# сложных сценах: не путает фон/предметы за товаром с самим товаром).
-FAL_KEY = os.environ.get("FAL_KEY", "")
-FAL_BG_REMOVAL_URL = "https://fal.run/fal-ai/birefnet"
+# rembg — локальное удаление фона. Модель по умолчанию isnet-general-use
+# (лучшее качество для объектов общего вида, включая ноутбуки; не путает
+# фон/предметы за товаром с самим товаром). Сессия создаётся один раз и
+# переиспользуется — иначе каждый вызов заново грузит ~170МБ модели в память.
+_REMBG_MODEL = os.environ.get("REMBG_MODEL", "isnet-general-use")
+_rembg_session = None
 
 _ICONS = os.path.join(os.path.dirname(__file__), "avitomat_card", "assets", "icons")
 
@@ -51,52 +53,42 @@ _SPEC_ICONS = [
 ]
 
 
-async def _remove_bg(image_bytes: bytes, mime_type: str = "image/jpeg") -> bytes | None:
-    """Убирает фон через fal.ai (BiRefNet). Фото уходит data-URI, ответ с
-    sync_mode=True приходит тоже data-URI — декодируем его в PNG-байты."""
-    if not FAL_KEY:
-        logger.info("FAL_KEY не задан — фон не убирается")
-        return None
-    b64 = base64.standard_b64encode(image_bytes).decode()
-    payload = {"image_url": f"data:{mime_type};base64,{b64}", "sync_mode": True}
+def _get_rembg_session():
+    """Лениво создаёт и кэширует сессию rembg. Первый вызов скачивает модель
+    (~170МБ в ~/.u2net/) и загружает её в ONNX-runtime — занимает 10–30с,
+    поэтому делаем это один раз за всё время работы бота."""
+    global _rembg_session
+    if _rembg_session is None:
+        from rembg import new_session
+        logger.info("Загружаю модель rembg %s (первый запуск может занять время)...", _REMBG_MODEL)
+        _rembg_session = new_session(_REMBG_MODEL)
+        logger.info("Модель rembg %s загружена", _REMBG_MODEL)
+    return _rembg_session
+
+
+def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
+    """Синхронное удаление фона через rembg. Возвращает PNG-байты с прозрачным
+    фоном или None при сбое. Запускается в пуле потоков через asyncio.to_thread,
+    чтобы не блокировать event loop бота."""
+    from rembg import remove
+    inp = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    out = remove(inp, session=_get_rembg_session())
+    # rembg.remove может вернуть PIL.Image или байты — приводим к PNG-байтам.
+    if isinstance(out, Image.Image):
+        buf = io.BytesIO()
+        out.save(buf, format="PNG")
+        return buf.getvalue()
+    return out  # уже байты (PNG)
+
+
+async def _remove_bg(image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[bytes]:
+    """Убирает фон локально через rembg (isnet-general-use). Возвращает PNG-байты
+    с прозрачным фоном или None при сбое. mime_type оставлен для совместимости
+    с контрактом, rembg сам определяет формат по содержимому."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                FAL_BG_REMOVAL_URL,
-                json=payload,
-                headers={"Authorization": f"Key {FAL_KEY}"},
-                timeout=aiohttp.ClientTimeout(total=60),
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning("fal.ai BiRefNet %s: %s", resp.status, (await resp.text())[:200])
-                    return None
-                data = await resp.json()
+        return await asyncio.to_thread(_remove_bg_sync, image_bytes)
     except Exception:
-        logger.exception("Запрос к fal.ai не удался")
-        return None
-
-    url = (data.get("image") or {}).get("url", "")
-    if not url:
-        logger.warning("fal.ai BiRefNet: в ответе нет image.url: %s", str(data)[:200])
-        return None
-
-    if url.startswith("data:"):
-        try:
-            return base64.standard_b64decode(url.split(",", 1)[1])
-        except Exception:
-            logger.exception("Не удалось декодировать data-URI от fal.ai")
-            return None
-
-    # На случай, если fal вернул ссылку, а не data-URI — скачиваем.
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=40)) as r:
-                if r.status != 200:
-                    logger.warning("fal.ai скачивание результата %s", r.status)
-                    return None
-                return await r.read()
-    except Exception:
-        logger.exception("Не удалось скачать результат fal.ai")
+        logger.exception("rembg не смог убрать фон")
         return None
 
 
@@ -109,7 +101,7 @@ _LOGO_HEIGHT_FRAC = 92 / 1080
 _LOGO_MARGIN = 32  # одинаковый отступ сверху и справа, в пикселях
 
 
-def _compose_listing_photo(cutout_bytes: bytes, target_size: tuple[int, int]) -> bytes:
+def _compose_listing_photo(cutout_bytes: bytes, target_size: Tuple[int, int]) -> bytes:
     """Кладёт вырезанное (с прозрачным фоном) фото на градиентный фон (как у
     карточки), приводит к единому для всего объявления размеру (target_size —
     размер первого фото), добавляет мягкую тень и лёгкое сглаживание краёв
@@ -167,7 +159,7 @@ def _compose_listing_photo(cutout_bytes: bytes, target_size: tuple[int, int]) ->
 
 
 async def _remove_background_for_listing_photo(image_bytes: bytes, mime_type: str,
-                                               target_size: tuple[int, int]) -> bytes | None:
+                                               target_size: Tuple[int, int]) -> Optional[bytes]:
     cutout = await _remove_bg(image_bytes, mime_type)
     if cutout is None:
         return None
@@ -187,12 +179,21 @@ LISTING_PHOTO_SIZE = (1280, 960)
 async def remove_backgrounds(images: list[tuple[bytes, str]]) -> list[tuple[bytes, str]]:
     """Прогоняет каждое фото объявления через удаление фона, приводя все фото
     к единому фиксированному размеру. Фото, для которых убрать фон не
-    удалось (нет ключа, ошибка API), остаются как есть — объявление не
-    должно срываться из-за одного неудачного фото."""
+    удалось (ошибка rembg), остаются как есть с warning в лог — объявление не
+    должно срываться из-за одного неудачного фото, но сбой не проходит
+    незамеченным."""
     results = []
-    for image_bytes, mime_type in images:
+    failed = []
+    total = len(images)
+    for i, (image_bytes, mime_type) in enumerate(images, start=1):
         processed = await _remove_background_for_listing_photo(image_bytes, mime_type, LISTING_PHOTO_SIZE)
-        results.append((processed, "image/jpeg") if processed is not None else (image_bytes, mime_type))
+        if processed is not None:
+            results.append((processed, "image/jpeg"))
+        else:
+            failed.append(i)
+            results.append((image_bytes, mime_type))
+    if failed:
+        logger.warning("rembg не справился с фото %s из %s — они пойдут как есть", failed, total)
     return results
 
 
@@ -244,7 +245,7 @@ def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec]) -> byt
 
 
 async def build_card(vision_params: dict, product_image_bytes: bytes,
-                     mime_type: str = "image/jpeg") -> bytes | None:
+                     mime_type: str = "image/jpeg") -> Optional[bytes]:
     """Полный цикл: убрать фон + нарисовать карточку. Возвращает PNG-байты или
     None (нет ключа / не получилось). Рисование — в отдельном потоке, чтобы не
     блокировать event loop бота."""
