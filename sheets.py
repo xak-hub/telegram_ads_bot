@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Optional
 
 import gspread
 from dotenv import load_dotenv
@@ -12,8 +13,10 @@ load_dotenv()
 SPREADSHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "service_account.json")
 
-_gc = gspread.service_account(filename=CREDENTIALS_FILE)
-_sheet = _gc.open_by_key(SPREADSHEET_ID).sheet1
+# Временно отключено из-за проблемы с service_account.json
+# _gc = gspread.service_account(filename=CREDENTIALS_FILE)
+# _sheet = _gc.open_by_key(SPREADSHEET_ID).sheet1
+_sheet = None
 
 
 def _is_transient(e: Exception) -> bool:
@@ -40,7 +43,7 @@ async def ensure_header() -> None:
 
 async def append_row(
     vision_params: dict, avito_answers: dict, price: str, address: str, listing_id: str,
-    photo_urls: list[str] | None = None,
+    photo_urls: Optional[list[str]] = None,
 ) -> None:
     await ensure_header()
     values = build_values(vision_params, avito_answers, price, address, listing_id, photo_urls)

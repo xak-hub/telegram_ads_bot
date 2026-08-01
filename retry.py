@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, TypeVar, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ async def retry_async(
     Не временные ошибки (по is_transient) пробрасываются сразу, без повторов —
     нет смысла повторять запрос с неверными правами доступа или битыми данными.
     """
-    last_error: Exception | None = None
+    last_error: Optional[Exception] = None
     for attempt in range(1, retries + 1):
         try:
             return await fn()

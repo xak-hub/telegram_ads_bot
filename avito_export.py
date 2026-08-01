@@ -1,5 +1,6 @@
 import os
 import shutil
+from typing import Optional
 
 from openpyxl import load_workbook
 
@@ -92,7 +93,7 @@ def remove_listings(listing_ids) -> int:
 
 def append_listing(
     vision_params: dict, avito_answers: dict, price: str, address: str, listing_id: str,
-    photo_urls: list[str] | None = None,
+    photo_urls: Optional[list[str]] = None,
 ) -> None:
     """Добавляет объявление строкой в avito_export.xlsx — точную копию шаблона Avito."""
     _ensure_export_file()

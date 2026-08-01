@@ -1,6 +1,7 @@
 import datetime
 import os
 import re
+from typing import Optional
 
 from openpyxl import load_workbook
 
@@ -223,7 +224,7 @@ def build_values(
     price: str,
     address: str,
     listing_id: str,
-    photo_urls: list[str] | None = None,
+    photo_urls: Optional[list[str]] = None,
 ) -> dict:
     """Собирает {название_колонки: значение} по реальным названиям колонок Avito."""
     brand = vision_params.get("brand", "")

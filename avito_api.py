@@ -18,6 +18,8 @@ import logging
 import os
 import time
 
+from typing import Optional
+
 import aiohttp
 from dotenv import load_dotenv
 
@@ -80,7 +82,7 @@ async def _get_user_id(session: aiohttp.ClientSession, token: str) -> str:
 
 
 async def _avito_id_for(session: aiohttp.ClientSession, token: str, user_id: str,
-                        ad_id: str) -> int | None:
+                        ad_id: str) -> Optional[int]:
     """Наш ad_id из фида -> внутренний id объявления на Avito. None, если
     автозагрузка ещё не обработала это объявление (тогда трогать его нельзя)."""
     url = f"{BASE_URL}/autoload/v1/accounts/{user_id}/items/{ad_id}/"
@@ -94,7 +96,7 @@ async def _avito_id_for(session: aiohttp.ClientSession, token: str, user_id: str
 
 
 async def _live_status(session: aiohttp.ClientSession, token: str, user_id: str,
-                       avito_id: int) -> str | None:
+                       avito_id: int) -> Optional[str]:
     """Живой статус объявления на сайте по внутреннему id Avito."""
     url = f"{BASE_URL}/core/v1/accounts/{user_id}/items/{avito_id}/"
     async with session.get(url, headers={"Authorization": f"Bearer {token}"}) as resp:
