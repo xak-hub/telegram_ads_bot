@@ -40,8 +40,8 @@ _ICONS = os.path.join(os.path.dirname(__file__), "avitomat_card", "assets", "ico
 # Фиксированные пункты доверия (в одну линию под фото на карточке).
 _BADGES = [
     (os.path.join(_ICONS, "insurance.png"), "Гарантия 6 месяцев"),
-    (os.path.join(_ICONS, "security.png"), "Проверен по 25 параметрам"),
     (os.path.join(_ICONS, "loading.png"), "Свежие драйверы, базовый софт"),
+    (os.path.join(_ICONS, "security.png"), "Проверен по 25 параметрам"),
 ]
 
 # Иконки характеристик (сетка 2x2) — в том же порядке, что и _card_specs().
