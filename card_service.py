@@ -13,7 +13,9 @@
 """
 
 import asyncio
+import base64
 import io
+import json
 import logging
 import os
 import tempfile
@@ -31,11 +33,16 @@ logger = logging.getLogger(__name__)
 # Удаление фона — локально. Движок выбирается через BG_ENGINE в .env:
 #   "rembg"                  — isnet-general-use (быстро ~3с/фото, среднее качество)
 #   "transparent-background" — InSPyReNet (медленно ~36с/фото, качество выше)
+#   "bria"                   — Bria RMBG 2.0 через fal.ai (~3.5с/фото, SOTA-качество, $0.003/фото)
 # Модель rembg настраивается отдельно через REMBG_MODEL (по умолчанию isnet-general-use).
 _BG_ENGINE = os.environ.get("BG_ENGINE", "rembg").lower()
 _REMBG_MODEL = os.environ.get("REMBG_MODEL", "isnet-general-use")
 _rembg_session = None
 _tb_remover = None  # ленивый инстанс transparent-background (InSPyReNet)
+
+# fal.ai (Bria RMBG 2.0) — лучшее качество через облачный API.
+FAL_KEY = os.environ.get("FAL_KEY", "")
+FAL_BRIA_URL = "https://fal.run/fal-ai/bria/background/remove"
 
 _ICONS = os.path.join(os.path.dirname(__file__), "avitomat_card", "assets", "icons")
 
@@ -105,9 +112,52 @@ def _remove_bg_sync_inspyrenet(image_bytes: bytes) -> Optional[bytes]:
     return buf.getvalue()
 
 
+def _remove_bg_sync_bria(image_bytes: bytes) -> Optional[bytes]:
+    """Удаление фона через Bria RMBG 2.0 (fal.ai API). Лучшее качество (SOTA),
+    ~3.5с/фото, $0.003/фото. Возвращает PNG-байты с прозрачным фоном или None."""
+    if not FAL_KEY:
+        logger.warning("FAL_KEY не задан — Bria недоступна")
+        return None
+    import urllib.request
+    b64 = base64.standard_b64encode(image_bytes).decode()
+    payload = json.dumps({"image_url": f"data:image/png;base64,{b64}"}).encode()
+    req = urllib.request.Request(
+        FAL_BRIA_URL, data=payload,
+        headers={"Authorization": f"Key {FAL_KEY}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        logger.exception("fal.ai (Bria) запрос не удался")
+        return None
+
+    url = (data.get("image") or {}).get("url", "")
+    if not url:
+        logger.warning("Bria: в ответе нет image.url: %s", str(data)[:200])
+        return None
+
+    if url.startswith("data:"):
+        try:
+            return base64.standard_b64decode(url.split(",", 1)[1])
+        except Exception:
+            logger.exception("Bria: не удалось декодировать data-URI")
+            return None
+
+    # fal вернул ссылку на результат — скачиваем
+    try:
+        with urllib.request.urlopen(url, timeout=40) as r:
+            return r.read()
+    except Exception:
+        logger.exception("Bria: не удалось скачать результат")
+        return None
+
+
 def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
     """Синхронное удаление фона выбранным движком (BG_ENGINE). Возвращает PNG-байты
     с прозрачным фоном или None при сбое."""
+    if _BG_ENGINE == "bria":
+        return _remove_bg_sync_bria(image_bytes)
     if _BG_ENGINE == "transparent-background":
         return _remove_bg_sync_inspyrenet(image_bytes)
     return _remove_bg_sync_rembg(image_bytes)
