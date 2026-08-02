@@ -356,10 +356,27 @@ async def _send_photo_album(chat_id: int, items: list[tuple[bytes, str]]) -> Non
 
 async def _process_listing(anchor_message: Message, photo_messages: list[Message], user_note: str,
                            mode: str = "full"):
-    status = await anchor_message.answer(f"{len(photo_messages)} фото добавлены, анализирую...")
+    status = await anchor_message.answer("⏳ Обработка...\n   [ ] Скачиваю фото\n   [ ] Распознаю характеристики\n   [ ] Классифицирую фото\n   [ ] Убираю фон\n   [ ] Собираю карточку")
+
+    # Этапы прогресс-бара: mark_done — сколько этапов已完成, current — текст активного.
+    async def _progress(done: int, current: str | None = None, extra: str = "") -> None:
+        stages = ["Скачиваю фото", "Распознаю характеристики", "Классифицирую фото", "Убираю фон", "Собираю карточку"]
+        lines = ["⏳ Обработка..."]
+        for i, label in enumerate(stages):
+            mark = "✓" if i < done else ("⟳" if (current and i == done) else " ")
+            line = f"   [{mark}] {label}"
+            if i == done and current == label and extra:
+                line += f" {extra}"
+            lines.append(line)
+        try:
+            await status.edit_text("\n".join(lines))
+        except Exception:
+            pass  # слишком частое обновление игнорируем
 
     try:
+        await _progress(0, "Скачиваю фото")
         images = [(await _download(m), _mime_of(m)) for m in photo_messages]
+        await _progress(1, "Распознаю характеристики")
         result = await analyze_photo(images, user_note)
     except Exception as e:
         logger.exception("Photo analysis failed")
@@ -376,6 +393,8 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             f"и/или текстом уточни:\n{questions}\n\nЗатем снова /done."
         )
         return
+
+    await _progress(2, "Классифицирую фото")
 
     # Скриншоты (характеристики, диагностика, чужие объявления) уже дали свои
     # данные распознаванию выше — в само объявление идут только реальные фото
@@ -408,6 +427,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     photo_urls: list[str] = []
     listing_photos: list[tuple[bytes, str]] = []
     try:
+        await _progress(3, "Убираю фон", f"({len(device_photos)} фото)")
         listing_photos = await card_service.remove_backgrounds(device_photos) if mode == "full" else device_photos
         photo_urls = await yandex_storage.upload_photos(listing_photos, listing_id)
     except Exception as e:
@@ -425,6 +445,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if mode == "full":
         try:
             if cover_photo:
+                await _progress(4, "Собираю карточку")
                 card_bytes = await card_service.build_card(
                     result.get("parameters", {}), cover_photo[0], cover_photo[1]
                 )
@@ -436,6 +457,9 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
                     media_items = [(card_bytes, "image/png")] + media_items
         except Exception:
             logger.exception("Card generation step failed")
+
+    # Финальный прогресс — всё готово.
+    await _progress(5)
 
     await _send_photo_album(anchor_message.chat.id, media_items)
 
