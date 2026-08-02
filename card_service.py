@@ -101,12 +101,32 @@ _LOGO_HEIGHT_FRAC = 92 / 1080
 _LOGO_MARGIN = 32  # одинаковый отступ сверху и справа, в пикселях
 
 
+def _cleanup_alpha(im: Image.Image) -> Image.Image:
+    """Постобработка альфа-канала вырезанного товара:
+    1. Пороговое отсечение (threshold) — убирает полуопрозрачный «ореол» и
+       остатки фона по краям (артефакты isnet/BiRefNet), делая край чётким.
+    2. Лёгкое сглаживание (edge blur) — антиалиасинг границы, чтобы после
+       threshold край не был рваным («лесенкой»).
+    Возвращает изображение в режиме RGBA."""
+    alpha = im.split()[3]
+    # Threshold: всё ниже 128 → 0 (фон), выше → 255 (товар).
+    alpha = alpha.point(lambda p: 255 if p > 128 else 0)
+    # Сглаживание жёсткой границы (1px blur даёт антиалиасинг без ореолов).
+    alpha = alpha.filter(ImageFilter.GaussianBlur(1.0))
+    im.putalpha(alpha)
+    return im
+
+
 def _compose_listing_photo(cutout_bytes: bytes, target_size: Tuple[int, int]) -> bytes:
     """Кладёт вырезанное (с прозрачным фоном) фото на градиентный фон (как у
     карточки), приводит к единому для всего объявления размеру (target_size —
-    размер первого фото), добавляет мягкую тень и лёгкое сглаживание краёв
-    после вырезания фона, плюс логотип сверху справа. Возвращает JPEG-байты."""
+    размер первого фото), добавляет мягкую тень и логотип сверху справа.
+    Товар заполняет кадр максимально (минимальные отступы только под тень).
+    Возвращает JPEG-байты."""
     im = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+
+    # Постобработка краёв: убираем ореолы/артефакты вырезки (threshold + AA).
+    im = _cleanup_alpha(im)
 
     # Обрезаем по фактическим границам товара (без этого прозрачные поля
     # вокруг мелко снятого товара остаются в кадре, и после вписывания в
@@ -115,16 +135,12 @@ def _compose_listing_photo(cutout_bytes: bytes, target_size: Tuple[int, int]) ->
     if bbox:
         im = im.crop(bbox)
 
-    # Сглаживание краёв — лёгкий блюр альфа-канала убирает жёсткие/рваные
-    # границы, которые иногда оставляет вырезание фона.
     tw, th = target_size
     scale_factor = th / 1080
-    edge_blur = max(1.0, 1.5 * scale_factor)
-    im.putalpha(im.split()[3].filter(ImageFilter.GaussianBlur(edge_blur)))
 
-    # Вписываем в целевой размер с сохранением пропорций, по максимуму (с
-    # небольшим запасом по краям, чтобы тень не обрезалась).
-    budget = 0.94
+    # Максимальное заполнение: бюджет 0.98 (минимальный запас под тень),
+    # товар занимает почти весь кадр.
+    budget = 0.98
     fit_scale = min(tw * budget / im.width, th * budget / im.height)
     new_w, new_h = max(1, int(im.width * fit_scale)), max(1, int(im.height * fit_scale))
     im = im.resize((new_w, new_h), Image.LANCZOS)

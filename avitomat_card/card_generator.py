@@ -206,6 +206,16 @@ def _wrap_title(draw, text, font_path, font_size, max_w, line_gap, max_lines=2):
     return font, [text]
 
 
+def _cleanup_cutout_alpha(im):
+    """Постобработка альфа-канала вырезанного товара: threshold убирает
+    ореолы/остатки фона, лёгкий blur даёт антиалиасинг края."""
+    alpha = im.split()[3]
+    alpha = alpha.point(lambda p: 255 if p > 128 else 0)
+    alpha = alpha.filter(ImageFilter.GaussianBlur(1.0))
+    im.putalpha(alpha)
+    return im
+
+
 # ---------------------------------------------------------------------------
 # Основная функция
 # ---------------------------------------------------------------------------
@@ -296,6 +306,8 @@ def generate_card(config: CardConfig) -> str:
 
     # ===================== ТОВАР: по центру, макс. размера =================
     cut = Image.open(config.product_cutout_path).convert("RGBA")
+    # Постобработка краёв: убираем ореолы/артефакты вырезки (threshold + AA).
+    cut = _cleanup_cutout_alpha(cut)
     cut = cut.crop(cut.getbbox()) if cut.getbbox() else cut
 
     # Область под товар: между блоком характеристик и нижней строкой бейджей.
