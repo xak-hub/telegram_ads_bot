@@ -356,29 +356,10 @@ async def _send_photo_album(chat_id: int, items: list[tuple[bytes, str]]) -> Non
 
 async def _process_listing(anchor_message: Message, photo_messages: list[Message], user_note: str,
                            mode: str = "full"):
-    status = await anchor_message.answer("⏳ Обработка...\n   [ ] Скачиваю фото\n   [ ] Распознаю характеристики\n   [ ] Классифицирую фото\n   [ ] Убираю фон\n   [ ] Собираю карточку")
+    status = await anchor_message.answer("⏳ Обработка...\n   [ ] Скачиваю фото\n   [ ] Распознавание...\n   [ ] Убираю фон\n   [ ] Собираю карточку")
 
-    # Этапы прогресс-бара: mark_done — сколько этапов已完成, current — текст активного.
-    async def _progress(done: int, current: str | None = None, extra: str = "",
-                        details: str = "") -> None:
-        stages = ["Скачиваю фото", "Распознаю характеристики", "Классифицирую фото", "Убираю фон", "Собираю карточку"]
-        lines = ["⏳ Обработка..."]
-        for i, label in enumerate(stages):
-            mark = "✓" if i < done else ("⟳" if (current and i == done) else " ")
-            line = f"   [{mark}] {label}"
-            if i == done and current == label and extra:
-                line += f" {extra}"
-            lines.append(line)
-        if details:
-            lines.append("")
-            lines.append(details)
-        try:
-            await status.edit_text("\n".join(lines))
-        except Exception:
-            pass  # слишком частое обновление игнорируем
-
-    def _format_recognized(p: dict) -> str:
-        """Сводка распознанных характеристик для показа под прогресс-баром."""
+    def _format_recognized(p: dict) -> list[str]:
+        """Список строк распознанных характеристик для этапа прогресс-бара."""
         bits = []
         brand_model = f"{p.get('brand','').strip()} {p.get('model','').strip()}".strip()
         if brand_model:
@@ -398,14 +379,46 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             if p.get("screen_resolution"):
                 screen += f", {p['screen_resolution']}"
             bits.append(screen)
-        if not bits:
-            return ""
-        return "🔍 Распознал:\n   " + "\n   ".join(bits)
+        return bits
+
+    # Этапы прогресс-бара. done — сколько этапов已完成 (0..3),
+    # current — actively в работе. recognized — список строк распознанного,
+    # показывается как отдельный «этап» после скачивания.
+    async def _progress(done: int, current: bool = False, extra: str = "",
+                        recognized: list[str] | None = None) -> None:
+        lines = ["⏳ Обработка..."]
+        # Этап 0: Скачиваю фото
+        mark = "✓" if done > 0 else ("⟳" if (current and done == 0) else " ")
+        lines.append(f"   [{mark}] Скачиваю фото")
+        # Этап 1: распознанные характеристики (многострочный)
+        if recognized:
+            for i, line in enumerate(recognized):
+                m = "✓" if (done > 1 or (i == 0 and not current)) else ("⟳" if (current and done == 1) else " ")
+                if i == 0:
+                    lines.append(f"   [{m}] {line}")
+                else:
+                    lines.append(f"       {line}")
+        else:
+            mark = "✓" if done > 1 else ("⟳" if (current and done == 1) else " ")
+            lines.append(f"   [{mark}] Распознавание...")
+        # Этап 2: Убираю фон
+        mark = "✓" if done > 2 else ("⟳" if (current and done == 2) else " ")
+        bg_line = "Убираю фон"
+        if extra and done == 2:
+            bg_line += f" ({extra})"
+        lines.append(f"   [{mark}] {bg_line}")
+        # Этап 3: Собираю карточку
+        mark = "✓" if done > 3 else ("⟳" if (current and done == 3) else " ")
+        lines.append(f"   [{mark}] Собираю карточку")
+        try:
+            await status.edit_text("\n".join(lines))
+        except Exception:
+            pass  # слишком частое обновление игнорируем
 
     try:
-        await _progress(0, "Скачиваю фото")
+        await _progress(0, current=True)
         images = [(await _download(m), _mime_of(m)) for m in photo_messages]
-        await _progress(1, "Распознаю характеристики")
+        await _progress(1, current=True)
         result = await analyze_photo(images, user_note)
     except Exception as e:
         logger.exception("Photo analysis failed")
@@ -424,7 +437,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
         return
 
     recognized = _format_recognized(result.get("parameters", {}))
-    await _progress(2, "Классифицирую фото", details=recognized)
+    await _progress(2, recognized=recognized)
 
     # Скриншоты (характеристики, диагностика, чужие объявления) уже дали свои
     # данные распознаванию выше — в само объявление идут только реальные фото
@@ -457,7 +470,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     photo_urls: list[str] = []
     listing_photos: list[tuple[bytes, str]] = []
     try:
-        await _progress(3, "Убираю фон", f"({len(device_photos)} фото)", details=recognized)
+        await _progress(3, current=True, extra=f"{len(device_photos)} фото", recognized=recognized)
         listing_photos = await card_service.remove_backgrounds(device_photos) if mode == "full" else device_photos
         photo_urls = await yandex_storage.upload_photos(listing_photos, listing_id)
     except Exception as e:
@@ -475,7 +488,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if mode == "full":
         try:
             if cover_photo:
-                await _progress(4, "Собираю карточку", details=recognized)
+                await _progress(4, current=True, recognized=recognized)
                 card_bytes = await card_service.build_card(
                     result.get("parameters", {}), cover_photo[0], cover_photo[1]
                 )
@@ -489,7 +502,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             logger.exception("Card generation step failed")
 
     # Финальный прогресс — всё готово.
-    await _progress(5, details=recognized)
+    await _progress(5, recognized=recognized)
 
     await _send_photo_album(anchor_message.chat.id, media_items)
 
