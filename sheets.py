@@ -13,10 +13,8 @@ load_dotenv()
 SPREADSHEET_ID = os.environ["GOOGLE_SHEET_ID"]
 CREDENTIALS_FILE = os.environ.get("GOOGLE_CREDENTIALS_FILE", "service_account.json")
 
-# Временно отключено из-за проблемы с service_account.json
-# _gc = gspread.service_account(filename=CREDENTIALS_FILE)
-# _sheet = _gc.open_by_key(SPREADSHEET_ID).sheet1
-_sheet = None
+_gc = gspread.service_account(filename=CREDENTIALS_FILE)
+_sheet = _gc.open_by_key(SPREADSHEET_ID).sheet1
 
 
 def _is_transient(e: Exception) -> bool:

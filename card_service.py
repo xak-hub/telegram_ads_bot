@@ -28,12 +28,14 @@ from avito_row import round_storage
 
 logger = logging.getLogger(__name__)
 
-# rembg — локальное удаление фона. Модель по умолчанию isnet-general-use
-# (лучшее качество для объектов общего вида, включая ноутбуки; не путает
-# фон/предметы за товаром с самим товаром). Сессия создаётся один раз и
-# переиспользуется — иначе каждый вызов заново грузит ~170МБ модели в память.
+# Удаление фона — локально. Движок выбирается через BG_ENGINE в .env:
+#   "rembg"                  — isnet-general-use (быстро ~3с/фото, среднее качество)
+#   "transparent-background" — InSPyReNet (медленно ~36с/фото, качество выше)
+# Модель rembg настраивается отдельно через REMBG_MODEL (по умолчанию isnet-general-use).
+_BG_ENGINE = os.environ.get("BG_ENGINE", "rembg").lower()
 _REMBG_MODEL = os.environ.get("REMBG_MODEL", "isnet-general-use")
 _rembg_session = None
+_tb_remover = None  # ленивый инстанс transparent-background (InSPyReNet)
 
 _ICONS = os.path.join(os.path.dirname(__file__), "avitomat_card", "assets", "icons")
 
@@ -66,14 +68,12 @@ def _get_rembg_session():
     return _rembg_session
 
 
-def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
-    """Синхронное удаление фона через rembg. Возвращает PNG-байты с прозрачным
-    фоном или None при сбое. Запускается в пуле потоков через asyncio.to_thread,
-    чтобы не блокировать event loop бота."""
+def _remove_bg_sync_rembg(image_bytes: bytes) -> Optional[bytes]:
+    """Удаление фона через rembg (isnet-general-use). Быстро (~3с/фото),
+    среднее качество."""
     from rembg import remove
     inp = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     out = remove(inp, session=_get_rembg_session())
-    # rembg.remove может вернуть PIL.Image или байты — приводим к PNG-байтам.
     if isinstance(out, Image.Image):
         buf = io.BytesIO()
         out.save(buf, format="PNG")
@@ -81,14 +81,46 @@ def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
     return out  # уже байты (PNG)
 
 
+def _get_tb_remover():
+    """Лениво создаёт инстанс transparent-background (InSPyReNet). Первый вызов
+    скачивает модель (~170МБ) и загружает PyTorch — занимает ~10с."""
+    global _tb_remover
+    if _tb_remover is None:
+        from transparent_background import Remover
+        logger.info("Загружаю модель InSPyReNet (transparent-background)...")
+        _tb_remover = Remover()
+        logger.info("Модель InSPyReNet загружена")
+    return _tb_remover
+
+
+def _remove_bg_sync_inspyrenet(image_bytes: bytes) -> Optional[bytes]:
+    """Удаление фона через InSPyReNet (transparent-background). Медленно (~36с/фото
+    на CPU), но качество выше, чем у isnet."""
+    remover = _get_tb_remover()
+    inp = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    out = remover.process(inp)
+    buf = io.BytesIO()
+    # process() возвращает RGBA-изображение с прозрачным фоном
+    out.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
+    """Синхронное удаление фона выбранным движком (BG_ENGINE). Возвращает PNG-байты
+    с прозрачным фоном или None при сбое."""
+    if _BG_ENGINE == "transparent-background":
+        return _remove_bg_sync_inspyrenet(image_bytes)
+    return _remove_bg_sync_rembg(image_bytes)
+
+
 async def _remove_bg(image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[bytes]:
-    """Убирает фон локально через rembg (isnet-general-use). Возвращает PNG-байты
-    с прозрачным фоном или None при сбое. mime_type оставлен для совместимости
-    с контрактом, rembg сам определяет формат по содержимому."""
+    """Убирает фон локально. Движок = BG_ENGINE из .env (rembg или
+    transparent-background). Возвращает PNG-байты с прозрачным фоном или None
+    при сбое. mime_type оставлен для совместимости с контрактом."""
     try:
         return await asyncio.to_thread(_remove_bg_sync, image_bytes)
     except Exception:
-        logger.exception("rembg не смог убрать фон")
+        logger.exception("Удаление фона не удалось (движок=%s)", _BG_ENGINE)
         return None
 
 
