@@ -197,6 +197,14 @@ async def analyze_photo(images: list[tuple[bytes, str]], user_note: str) -> dict
             ],
         )
         raw_text = response.choices[0].message.content
+        if not raw_text or not raw_text.strip():
+            # Пустой ответ от GLM (часто бывает при rate limit / перегрузке).
+            # Логируем и кидаем JSONDecodeError — он помечен как временный и
+            # ретраится в retry_async.
+            logger.warning("GLM вернул пустой ответ (rate limit/перегрузка) — ретрай")
+            raise json.JSONDecodeError("Пустой ответ GLM", "", 0)
         return _extract_json(raw_text)
 
-    return await retry_async(_call, retries=3, is_transient=_is_transient)
+    # Больше попыток (5) и длиннее задержка — GLM регулярно отдаёт 429 (rate limit,
+    # код 1302) на первый запрос, лимит отпускает через несколько секунд.
+    return await retry_async(_call, retries=5, delay=4.0, is_transient=_is_transient)
