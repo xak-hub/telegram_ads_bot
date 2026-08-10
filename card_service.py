@@ -33,16 +33,20 @@ logger = logging.getLogger(__name__)
 # Удаление фона — локально. Движок выбирается через BG_ENGINE в .env:
 #   "rembg"                  — isnet-general-use (быстро ~3с/фото, среднее качество)
 #   "transparent-background" — InSPyReNet (медленно ~36с/фото, качество выше)
-#   "bria"                   — Bria RMBG 2.0 через fal.ai (~3.5с/фото, SOTA-качество, $0.003/фото)
+#   "bria"                   — Bria RMBG 2.0 через fal.ai (~3.5с/фото, SOTA-качество, $0.018/фото)
+#   "birefnet"               — BiRefNet через fal.ai (~1.6с/фото, высокое качество, дешевле)
 # Модель rembg настраивается отдельно через REMBG_MODEL (по умолчанию isnet-general-use).
 _BG_ENGINE = os.environ.get("BG_ENGINE", "rembg").lower()
 _REMBG_MODEL = os.environ.get("REMBG_MODEL", "isnet-general-use")
 _rembg_session = None
 _tb_remover = None  # ленивый инстанс transparent-background (InSPyReNet)
 
-# fal.ai (Bria RMBG 2.0) — лучшее качество через облачный API.
+# fal.ai — облачные модели удаления фона.
 FAL_KEY = os.environ.get("FAL_KEY", "")
-FAL_BRIA_URL = "https://fal.run/fal-ai/bria/background/remove"
+FAL_URLS = {
+    "bria":     "https://fal.run/fal-ai/bria/background/remove",
+    "birefnet": "https://fal.run/fal-ai/birefnet",
+}
 
 _ICONS = os.path.join(os.path.dirname(__file__), "avitomat_card", "assets", "icons")
 
@@ -112,36 +116,39 @@ def _remove_bg_sync_inspyrenet(image_bytes: bytes) -> Optional[bytes]:
     return buf.getvalue()
 
 
-def _remove_bg_sync_bria(image_bytes: bytes) -> Optional[bytes]:
-    """Удаление фона через Bria RMBG 2.0 (fal.ai API). Лучшее качество (SOTA),
-    ~3.5с/фото, $0.003/фото. Возвращает PNG-байты с прозрачным фоном или None."""
+def _remove_bg_sync_fal(image_bytes: bytes) -> Optional[bytes]:
+    """Удаление фона через fal.ai API (Bria RMBG 2.0 или BiRefNet — по BG_ENGINE).
+    Возвращает PNG-байты с прозрачным фоном или None."""
     if not FAL_KEY:
-        logger.warning("FAL_KEY не задан — Bria недоступна")
+        logger.warning("FAL_KEY не задан — fal.ai недоступен")
+        return None
+    if _BG_ENGINE not in FAL_URLS:
+        logger.warning("Неизвестный fal-движок: %s", _BG_ENGINE)
         return None
     import urllib.request
     b64 = base64.standard_b64encode(image_bytes).decode()
     payload = json.dumps({"image_url": f"data:image/png;base64,{b64}"}).encode()
     req = urllib.request.Request(
-        FAL_BRIA_URL, data=payload,
+        FAL_URLS[_BG_ENGINE], data=payload,
         headers={"Authorization": f"Key {FAL_KEY}", "Content-Type": "application/json"},
     )
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
     except Exception:
-        logger.exception("fal.ai (Bria) запрос не удался")
+        logger.exception("fal.ai (%s) запрос не удался", _BG_ENGINE)
         return None
 
     url = (data.get("image") or {}).get("url", "")
     if not url:
-        logger.warning("Bria: в ответе нет image.url: %s", str(data)[:200])
+        logger.warning("fal.ai %s: в ответе нет image.url: %s", _BG_ENGINE, str(data)[:200])
         return None
 
     if url.startswith("data:"):
         try:
             return base64.standard_b64decode(url.split(",", 1)[1])
         except Exception:
-            logger.exception("Bria: не удалось декодировать data-URI")
+            logger.exception("fal.ai %s: не удалось декодировать data-URI", _BG_ENGINE)
             return None
 
     # fal вернул ссылку на результат — скачиваем
@@ -149,15 +156,15 @@ def _remove_bg_sync_bria(image_bytes: bytes) -> Optional[bytes]:
         with urllib.request.urlopen(url, timeout=40) as r:
             return r.read()
     except Exception:
-        logger.exception("Bria: не удалось скачать результат")
+        logger.exception("fal.ai %s: не удалось скачать результат", _BG_ENGINE)
         return None
 
 
 def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
     """Синхронное удаление фона выбранным движком (BG_ENGINE). Возвращает PNG-байты
     с прозрачным фоном или None при сбое."""
-    if _BG_ENGINE == "bria":
-        return _remove_bg_sync_bria(image_bytes)
+    if _BG_ENGINE in ("bria", "birefnet"):
+        return _remove_bg_sync_fal(image_bytes)
     if _BG_ENGINE == "transparent-background":
         return _remove_bg_sync_inspyrenet(image_bytes)
     return _remove_bg_sync_rembg(image_bytes)
