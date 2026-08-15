@@ -227,9 +227,9 @@ def _compose_listing_photo(cutout_bytes: bytes, target_size: Tuple[int, int]) ->
     tw, th = target_size
     scale_factor = th / 1080
 
-    # Максимальное заполнение: бюджет 0.98 (минимальный запас под тень),
-    # товар занимает почти весь кадр.
-    budget = 0.98
+    # Максимальное заполнение: бюджет 0.995 (2-3px запаса на антиалиасинг
+    # края), товар занимает весь кадр практически от края до края.
+    budget = 0.995
     fit_scale = min(tw * budget / im.width, th * budget / im.height)
     new_w, new_h = max(1, int(im.width * fit_scale)), max(1, int(im.height * fit_scale))
     im = im.resize((new_w, new_h), Image.LANCZOS)
