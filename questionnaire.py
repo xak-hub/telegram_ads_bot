@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Optional, Union, List
 
@@ -10,6 +11,8 @@ from sheets import append_row, SPREADSHEET_ID
 from avito_export import append_listing, EXPORT_PATH
 from avito_row import make_listing_id, round_storage
 from yandex_storage import upload_feed
+
+logger = logging.getLogger(__name__)
 
 router = Router()
 
@@ -376,10 +379,56 @@ async def handle_done(callback: CallbackQuery):
 
 
 # --- Предпоказ перед публикацией: ✅ Да / ✏️ Редактировать / ✖ Отмена ---
+async def _send_gallery_photos(message: Message, chat_id: int, pending: dict) -> None:
+    """Переотправляет карточку и фото объявления отдельными сообщениями, чтобы
+    юзер мог сохранить их в галерею (долгое нажатие → «Сохранить в галерею»)."""
+    from aiogram.types import BufferedInputFile, URLInputFile, InputMediaPhoto
+
+    media = []
+    card_bytes = pending.get("card_bytes")
+    if card_bytes:
+        media.append(InputMediaPhoto(
+            media=BufferedInputFile(card_bytes, filename="card.png"),
+            caption="📥 Фото для сохранения в галерею"))
+    for url in pending.get("photo_urls") or []:
+        try:
+            media.append(InputMediaPhoto(media=URLInputFile(url)))
+        except Exception:
+            logger.exception("Не удалось подготовить фото из %s", url[:80])
+
+    if not media:
+        await message.answer("Нет фото для сохранения.")
+        return
+
+    try:
+        # Альбомами по 10 (лимит Telegram).
+        for i in range(0, len(media), 10):
+            await message.answer_media_group(media=media[i:i + 10])
+    except Exception:
+        # Если альбом не ушёл (например, битый URL) — шлём карточку по одной.
+        logger.exception("Не удалось отправить альбом для галереи")
+        if card_bytes:
+            await message.answer_photo(BufferedInputFile(card_bytes, filename="card.png"),
+                                        caption="📥 Сохраните долгим нажатием")
+
+
 @router.callback_query(F.data.startswith("pub:"))
 async def handle_publish_decision(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     action = callback.data.split(":", 1)[1]
+
+    # «Сохранить в галерею» — переотправляем фото отдельными сообщениями (юзер
+    # сохраняет их долгим нажатием). Предпоказ НЕ закрываем: после сохранения
+    # юзер всё ещё может разместить/отредактировать/отменить.
+    if action == "save":
+        pending = PREVIEW_PENDING.get(chat_id)
+        if not pending:
+            await callback.answer("Предпоказ устарел, начни заново с фото.", show_alert=True)
+            return
+        await callback.answer("Отправляю фото — сохрани их долгим нажатием")
+        await _send_gallery_photos(callback.message, chat_id, pending)
+        return
+
     pending = PREVIEW_PENDING.pop(chat_id, None)
 
     if action == "no":
@@ -652,11 +701,13 @@ async def finish_questionnaire(message, chat_id: int, price: str, address: str):
     }
 
     summary = _preview_summary(session["vision"], session["answers"], price, address)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Да, размещаем", callback_data="pub:yes"),
-        InlineKeyboardButton(text="✏️ Редактировать", callback_data="pub:edit"),
-        InlineKeyboardButton(text="✖ Отмена", callback_data="pub:no"),
-    ]])
+    # Каждая кнопка на своей строке — во всю ширину (максимальный размер в Telegram).
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, размещаем", callback_data="pub:yes")],
+        [InlineKeyboardButton(text="✏️ Редактировать", callback_data="pub:edit")],
+        [InlineKeyboardButton(text="📥 Сохранить в галерею", callback_data="pub:save")],
+        [InlineKeyboardButton(text="✖ Отмена", callback_data="pub:no")],
+    ])
 
     card_bytes = session.get("card_bytes")
     caption = f"📋 Проверьте объявление перед публикацией:\n\n{summary}"
