@@ -20,7 +20,7 @@ import card_service
 import avito_api
 from claude_vision import analyze_photo
 from avito_row import make_listing_id
-from avito_export import EXPORT_PATH
+from avito_export import EXPORT_PATH, list_listing_ids, remove_listings
 from avito_sync import sync_removed_from_avito
 from yandex_storage import download_feed
 
@@ -163,7 +163,8 @@ async def cmd_sync(message: Message):
     if not avito_api.is_configured():
         await message.answer(
             "Avito API не настроен — добавь AVITO_CLIENT_ID и AVITO_CLIENT_SECRET "
-            "в .env, тогда бот сможет сам убирать проданные объявления из фида."
+            "в .env, тогда бот сможет сам убирать проданные объявления из фида.\n\n"
+            "Пока можно вручную: /feed — список, /sold <номер> — убрать проданное."
         )
         return
     await message.answer("Проверяю статусы объявлений на Avito…")
@@ -181,6 +182,61 @@ async def cmd_sync(message: Message):
     else:
         await message.answer(
             f"Проверил {res['checked']} — снятых/проданных нет, фид не менял."
+        )
+
+
+@dp.message(Command("feed"))
+async def cmd_feed(message: Message):
+    """Показывает объявления, которые сейчас лежат в фиде автозагрузки Avito.
+    Автозагрузка считает фид «списком того, что должно висеть»: пока ID есть в
+    файле, Avito поднимет объявление заново, даже если оно продано и снято."""
+    ids = list_listing_ids()
+    if not ids:
+        await message.answer("Фид пуст — активных объявлений нет.")
+        return
+    lines = [f"{i}. {id_}" for i, id_ in enumerate(ids, 1)]
+    await message.answer(
+        "📋 Сейчас в фиде (автозагрузка Avito):\n" + "\n".join(lines)
+        + "\n\nПродал товар — убери его из фида: /sold <номер или ID>"
+    )
+
+
+@dp.message(Command("sold"))
+async def cmd_sold(message: Message):
+    """Убирает проданные/снятые объявления из фида и перезаливает его — иначе
+    автозагрузка Avito снова поднимет их в личный кабинет. Аргументы: номера
+    из /feed и/или точные ID, например: /sold 1 3 5 или /sold T14-6557-i5-1234."""
+    args = message.text.split()[1:]
+    if not args:
+        await message.answer(
+            "Укажи номера из /feed или ID: /sold 1 3 или /sold T14-6557-i5-1234"
+        )
+        return
+    ids_in_feed = list_listing_ids()
+    by_number = {str(i): id_ for i, id_ in enumerate(ids_in_feed, 1)}
+    targets = {by_number.get(a, a) for a in args}
+    targets &= set(ids_in_feed)  # отсекаем опечатки/несуществующие
+
+    if not targets:
+        await message.answer("Не нашёл таких объявлений в фиде. Список: /feed")
+        return
+
+    removed = remove_listings(targets)
+    if not removed:
+        await message.answer("Ничего не убрал — возможно, их уже нет в фиде.")
+        return
+    try:
+        await yandex_storage.upload_feed(EXPORT_PATH)
+        await message.answer(
+            f"✅ Убрал из фида {removed}: " + ", ".join(sorted(targets))
+            + "\nФид перезалит — Avito уберёт их из кабинета по расписанию "
+            "автозагрузки (обычно в течение часа)."
+        )
+    except Exception as e:
+        logger.exception("Не удалось перезалить фид после /sold")
+        await message.answer(
+            f"⚠️ Убрал локально ({removed}), но фид не перезалился: {e}\n"
+            "Перезалей вручную или повтори /sold с этими ID позже."
         )
 
 
