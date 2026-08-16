@@ -88,6 +88,36 @@ def _cpu_title_token(cpu: str) -> str:
     return _short_cpu(cpu)
 
 
+# Линейка процессора для колонки Авито «Линейка процессора» — выводится из
+# полного имени (например "Intel Core i7-1355U" -> "Core i7"). Значения
+# соответствуют справочнику Авито для категории «Ноутбуки».
+def cpu_line(cpu: str) -> str:
+    """Выводит линейку процессора из полного имени:
+    Core i3/i5/i7/i9, Ryzen 3/5/7/9, Celeron, Pentium, Xeon, Atom, Athlon,
+    Apple M1/M2/M3 (+ Pro/Max/Ultra). Пустая строка, если не распознано."""
+    if not cpu:
+        return ""
+    s = cpu.strip()
+
+    m = re.search(r"Core\s+(i[3579])\b", s, re.IGNORECASE)
+    if m:
+        return f"Core {m.group(1).lower()}"
+
+    m = re.search(r"Ryzen\s+(\d)\b", s, re.IGNORECASE)
+    if m:
+        return f"Ryzen {m.group(1)}"
+
+    m = re.search(r"\bM([1-4])(?:\s?(Pro|Max|Ultra))?\b", s, re.IGNORECASE)
+    if m and ("apple" in s.lower() or "macbook" in s.lower() or s.lower().startswith("m")):
+        suffix = (m.group(2) or "").title()
+        return f"M{m.group(1)}{(' ' + suffix) if suffix else ''}"
+
+    for line in ("Celeron", "Pentium", "Xeon", "Atom", "Athlon"):
+        if re.search(rf"\b{line}\b", s, re.IGNORECASE):
+            return line
+    return ""
+
+
 _DESC_INTRO_TAIL = (
     "Проверенный, настроенный и готовый к работе.\n"
     "С гарантией 6 месяцев и безлимитной постпродажной поддержкой.\n"
@@ -248,6 +278,7 @@ def build_values(
         "Цена": price,
         "Производитель": brand,
         "Модель": model,
+        "Линейка процессора": cpu_line(vision_params.get("cpu", "")),
         "Процессор": vision_params.get("cpu", ""),
         "Видеокарта": vision_params.get("gpu", ""),
         "Диагональ экрана ноутбука": vision_params.get("screen_size", ""),
