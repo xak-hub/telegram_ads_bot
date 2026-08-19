@@ -103,6 +103,11 @@ def cpu_line(cpu: str) -> str:
     if m:
         return f"Core {m.group(1).lower()}"
 
+    # Новые линейки Intel: "Core Ultra 9 285H" -> "Core Ultra 9" (Ultra 5/7/9).
+    m = re.search(r"Core\s+Ultra\s+([579])\b", s, re.IGNORECASE)
+    if m:
+        return f"Core Ultra {m.group(1)}"
+
     m = re.search(r"Ryzen\s+(\d)\b", s, re.IGNORECASE)
     if m:
         return f"Ryzen {m.group(1)}"
