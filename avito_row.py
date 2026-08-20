@@ -155,6 +155,24 @@ def _fmt_gb(value: str) -> str:
     return f"{int(v)} ГБ"
 
 
+def _gpu_vram_gb(vision_params: dict) -> str:
+    """Валидный объём видеопамяти дискретной карты в ГБ ('2', '6') или ''.
+    Принимает '2', '2 ГБ', '2GB'; отбрасывает мусор вне 1..32."""
+    raw = str(vision_params.get("gpu_vram_gb", "")).strip()
+    if not raw:
+        return ""
+    m = re.search(r"(\d+(?:[.,]\d+)?)", raw)
+    if not m:
+        return ""
+    try:
+        v = float(m.group(1).replace(",", "."))
+    except ValueError:
+        return ""
+    if not (1 <= v <= 32):
+        return ""
+    return f"{int(v)}" if v == int(v) else f"{v:g}"
+
+
 def _cpu_freq_suffix(vision_params: dict) -> str:
     """Вилка частот процессора: '(2.2-4.8 ГГц)'. Если известна только одна
     граница — '(до 4.8 ГГц)' / '(от 2.2 ГГц)'. Пусто — если частот нет."""
@@ -221,7 +239,11 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
             ram_line += f" (расширение до {_fmt_gb(ram_max)})"
         lines.append(ram_line)
     if gpu:
-        lines.append(f"Видеокарта: {gpu}")
+        gpu_line = f"Видеокарта: {gpu}"
+        vram = _gpu_vram_gb(vision_params)
+        if vram:
+            gpu_line += f" ({vram} ГБ)"
+        lines.append(gpu_line)
     if storage:
         storage_line = f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip()
         if storage_max:
@@ -350,6 +372,7 @@ def build_values(
         "Линейка процессора": cpu_line(vision_params.get("cpu", "")),
         "Процессор": vision_params.get("cpu", ""),
         "Видеокарта": vision_params.get("gpu", ""),
+        "Объем видеопамяти": _gpu_vram_gb(vision_params),
         "Диагональ экрана ноутбука": vision_params.get("screen_size", ""),
         "Общий объем накопителей": vision_params.get("storage_gb", ""),
         "Ссылки на фото": " | ".join(photo_urls) if photo_urls else "",
