@@ -155,13 +155,35 @@ def _fmt_gb(value: str) -> str:
     return f"{int(v)} ГБ"
 
 
+def _cpu_freq_suffix(vision_params: dict) -> str:
+    """Вилка частот процессора: '(2.2-4.8 ГГц)'. Если известна только одна
+    граница — '(до 4.8 ГГц)' / '(от 2.2 ГГц)'. Пусто — если частот нет."""
+    ghz_min = str(vision_params.get("cpu_ghz_min", "")).strip().replace(",", ".").rstrip(".")
+    ghz_max = str(vision_params.get("cpu_ghz_max", "")).strip().replace(",", ".").rstrip(".")
+    # валидация: это должно быть число 0.3..6.0
+    def _ok(v: str) -> bool:
+        try:
+            return 0.3 <= float(v) <= 6.0
+        except ValueError:
+            return False
+    ghz_min = ghz_min if _ok(ghz_min) else ""
+    ghz_max = ghz_max if _ok(ghz_max) else ""
+    if ghz_min and ghz_max:
+        if ghz_min == ghz_max:
+            return f"({ghz_min} ГГц)"
+        return f"({min(ghz_min, ghz_max, key=float)}-{max(ghz_min, ghz_max, key=float)} ГГц)"
+    if ghz_max:
+        return f"(до {ghz_max} ГГц)"
+    if ghz_min:
+        return f"(от {ghz_min} ГГц)"
+    return ""
+
+
 def _spec_block(vision_params: dict, avito_answers: dict) -> str:
     """Технический блок описания. Видеокарта и циклы АКБ — только если распознаны.
-    Процессор — с вилкой конфигураций модели (cpu_min..cpu_max), память и
-    накопитель — с максимумом апгрейда (SSD по умолчанию до 4 ТБ)."""
+    Процессор — с вилкой частот (базовая..Turbo), память и накопитель —
+    с максимумом апгрейда (SSD по умолчанию до 4 ТБ)."""
     cpu = vision_params.get("cpu", "").strip()
-    cpu_min = vision_params.get("cpu_min", "").strip()
-    cpu_max = vision_params.get("cpu_max", "").strip()
     gpu = vision_params.get("gpu", "").strip()
     ram = avito_answers.get("Объем оперативной памяти") or vision_params.get("ram_gb", "")
     storage = vision_params.get("storage_gb", "").strip()
@@ -189,8 +211,9 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
     lines = []
     if cpu:
         cpu_line = f"Процессор: {cpu}"
-        if cpu_min and cpu_max and cpu_min != cpu_max:
-            cpu_line += f" (в линейке модели: от {cpu_min} до {cpu_max})"
+        freq = _cpu_freq_suffix(vision_params)
+        if freq:
+            cpu_line += f" {freq}"
         lines.append(cpu_line)
     if ram:
         ram_line = f"Оперативная память: {ram} ГБ"
