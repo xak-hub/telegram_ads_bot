@@ -18,6 +18,10 @@ import questionnaire
 import yandex_storage
 import card_service
 import avito_api
+import avito_sync
+import pc_feed
+import pc_sheets
+import regard_publisher
 from claude_vision import analyze_photo
 from avito_row import make_listing_id
 from avito_export import EXPORT_PATH, list_listing_ids, remove_listings
@@ -142,9 +146,37 @@ async def cmd_start(message: Message):
         f"Когда всё прислал(а) — просто подожди {AUTO_START_DELAY} секунд, я начну "
         "анализировать сам. Не хочешь ждать — пришли команду /done.\n\n"
         "Команда /defaults — настроить значения по умолчанию (в чате, кнопками).\n\n"
+        "Системные блоки с Регарда: /regard [N] — опубликовать топ-N сборок, "
+        "/pcfeed — список в фиде, /pcsold <№> — убрать проданное. "
+        "Каждый день автоматически добавляется до 10 новых сборок.\n\n"
         "Дальше я распознаю характеристики, пришлю кнопки для заполнения оставшихся "
         "параметров и цены прямо в чате, а фото сам залью на Яндекс.Диск "
         "и запишу всё в Google Sheets и файл для Avito."
+    )
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
+    await message.answer(
+        "📖 Справка по командам\n\n"
+        "Ноутбуки:\n"
+        "/start — начать работу / сброс сессии\n"
+        "/done — обработать присланные фото сразу\n"
+        "/defaults — значения по умолчанию (адрес, состояние и т.д.)\n"
+        "/feed — список объявлений в фиде\n"
+        "/sold <№ или ID> — убрать проданное из фида (Авито уберёт из кабинета)\n"
+        "/sync — сверить статусы с Авито через API (нужна настройка)\n\n"
+        "Системные блоки (Регард):\n"
+        "/regard [N] — опубликовать топ-N сборок (по умолчанию 10)\n"
+        "/pcfeed — список сборок в фиде\n"
+        "/pcsold <№ или ID> — убрать проданные сборки\n"
+        "/pcrefresh — пересобрать сборки из свежих данных Регарда\n\n"
+        "Как продавать ноутбука:\n"
+        "1) пришли фото (можно пачкой, текстом можно дописать детали)\n"
+        "2) /done или подожди автостарта → прогресс → карточка и фото\n"
+        "3) анкета кнопками → цена → адрес\n"
+        "4) предпоказ: ✅ Да / ✏️ Редактировать / 📥 Сохранить / ✖ Отмена\n"
+        "5) продал → /feed → /sold <номер>"
     )
 
 
@@ -238,6 +270,117 @@ async def cmd_sold(message: Message):
             f"⚠️ Убрал локально ({removed}), но фид не перезалился: {e}\n"
             "Перезалей вручную или повтори /sold с этими ID позже."
         )
+
+
+@dp.message(Command("regard"))
+async def cmd_regard(message: Message):
+    """Публикует топовые сборки Регарда в фид системных блоков: /regard [N].
+    По умолчанию N = REGARD_DAILY_LIMIT (10). Уже опубликованные сборки не
+    дублируются — при изменившейся цене на Регарде обновляется их цена."""
+    args = message.text.split()[1:]
+    try:
+        limit = int(args[0]) if args else REGARD_DAILY_LIMIT
+    except ValueError:
+        await message.answer("Сколько сборок опубликовать? Например: /regard 5")
+        return
+    limit = max(1, min(limit, 30))
+
+    status = await message.answer(f"Беру топ-{limit} сборок Регарда «в наличии»…")
+    try:
+        res = await regard_publisher.publish_new(limit)
+    except Exception as e:
+        logger.exception("Публикация сборок Регарда упала")
+        await message.answer(f"⚠️ Не удалось: {e}")
+        return
+
+    lines = []
+    if res["added"]:
+        lines.append(f"✅ Добавил ({len(res['added'])}): " + ", ".join(res["added"]))
+    if res["updated"]:
+        lines.append(f"💰 Обновил цену ({len(res['updated'])}): " + ", ".join(res["updated"]))
+    if not res["added"] and not res["updated"]:
+        lines.append("Новых полных сборок не нашёл — всё топовое уже опубликовано.")
+    lines.append(f"Отсеял неполных: {len(res['rejected'])}")
+    if res["feed_url"]:
+        lines.append(f"\nФид перезалит: {res['feed_url']}")
+        lines.append(
+            "Если автозагрузка Avito ещё не смотрит на этот URL — добавь второе "
+            "подключение автозагрузки (файл по ссылке)."
+        )
+    await status.edit_text("\n".join(lines))
+
+
+@dp.message(Command("pcfeed"))
+async def cmd_pcfeed(message: Message):
+    """Показывает сборки из фида системных блоков (аналог /feed для ноутбуков)."""
+    ids = pc_feed.list_listing_ids()
+    if not ids:
+        await message.answer(
+            "Фид системных блоков пуст. Наполнить: /regard (топ сборок Регарда)."
+        )
+        return
+    lines = [f"{i}. {id_}" for i, id_ in enumerate(ids, 1)]
+    await message.answer(
+        "🖥 Сейчас в фиде системных блоков (автозагрузка Avito):\n" + "\n".join(lines)
+        + "\n\nПродали — убери из фида: /pcsold <номер или ID>"
+    )
+
+
+@dp.message(Command("pcsold"))
+async def cmd_pcsold(message: Message):
+    """Убирает проданные сборки из фида системных блоков и перезаливает его
+    (аналог /sold): /pcsold 1 3 или /pcsold pc-2027409."""
+    args = message.text.split()[1:]
+    if not args:
+        await message.answer("Укажи номера из /pcfeed или ID: /pcsold 1 3 или /pcsold pc-2027409")
+        return
+    ids_in_feed = pc_feed.list_listing_ids()
+    by_number = {str(i): id_ for i, id_ in enumerate(ids_in_feed, 1)}
+    targets = {by_number.get(a, a) for a in args}
+    targets &= set(ids_in_feed)  # отсекаем опечатки/несуществующие
+
+    if not targets:
+        await message.answer("Не нашёл таких сборок в фиде. Список: /pcfeed")
+        return
+
+    removed = pc_feed.remove_listings(targets)
+    if not removed:
+        await message.answer("Ничего не убрал — возможно, их уже нет в фиде.")
+        return
+    try:
+        await yandex_storage.upload_feed(pc_feed.EXPORT_PATH, yandex_storage.PC_OBJECT_KEY)
+        await message.answer(
+            f"✅ Убрал из фида системных блоков {removed}: " + ", ".join(sorted(targets))
+            + "\nФид перезалит — Avito уберёт их по расписанию автозагрузки."
+        )
+    except Exception as e:
+        logger.exception("Не удалось перезалить ПК-фид после /pcsold")
+        await message.answer(
+            f"⚠️ Убрал локально ({removed}), но фид не перезалился: {e}\n"
+            "Повтори /pcsold с этими ID позже."
+        )
+
+
+@dp.message(Command("pcrefresh"))
+async def cmd_pcrefresh(message: Message):
+    """Пересобирает все опубликованные сборки из свежих данных Регарда —
+    обновляет цены и заново прогоняет парсинг полей (для улучшений парсера)."""
+    status = await message.answer("Пересобираю все сборки из данных Регарда…")
+    try:
+        res = await regard_publisher.refresh_existing()
+    except Exception as e:
+        logger.exception("Обновление сборок Регарда упало")
+        await status.edit_text(f"⚠️ Не удалось: {e}")
+        return
+    lines = [
+        f"Пересобрано: {len(res['refreshed'])} из {res['total']}",
+        f"Фид и Google Sheets обновлены.",
+    ]
+    if res["failed"]:
+        lines.append("Не получилось (Регард не отдал): " + ", ".join(res["failed"]))
+    if res["feed_url"]:
+        lines.append(f"\nФид перезалит: {res['feed_url']}")
+    await status.edit_text("\n".join(lines))
 
 
 async def _download(msg: Message) -> bytes:
@@ -602,6 +745,12 @@ async def fallback(message: Message):
 # только ручную команду /sync.
 SYNC_INTERVAL = int(os.environ.get("AVITO_SYNC_INTERVAL", "1800"))
 
+# Сколько новых сборок Регарда публиковать в день (фоновая задача ниже).
+REGARD_DAILY_LIMIT = int(os.environ.get("REGARD_DAILY_LIMIT", "10"))
+# Первый запуск дневной задачи — вскоре после старта бота (секунды), далее раз в сутки.
+REGARD_FIRST_RUN_DELAY = int(os.environ.get("REGARD_FIRST_RUN_DELAY", "60"))
+REGARD_RUN_INTERVAL = 24 * 3600
+
 
 async def _sync_loop():
     while True:
@@ -612,6 +761,27 @@ async def _sync_loop():
                 logger.info("Автосинхрон: убрано из фида %s", res["removed"])
         except Exception:
             logger.exception("Автосинхрон с Avito упал — попробую в следующий раз")
+        try:
+            removed = await avito_sync.sync_pc_removed_from_avito()
+            if removed:
+                logger.info("Автосинхрон ПК-фида: убрано %s", removed)
+        except Exception:
+            logger.exception("Автосинхрон ПК-фида упал — попробую в следующий раз")
+
+
+async def _regard_loop():
+    """Раз в сутки добавляет топовые сборки Регарда в фид системных блоков."""
+    await asyncio.sleep(REGARD_FIRST_RUN_DELAY)
+    while True:
+        try:
+            res = await regard_publisher.publish_new(REGARD_DAILY_LIMIT)
+            logger.info(
+                "Регард: добавлено %d, обновлено %d, отсеяно %d",
+                len(res["added"]), len(res["updated"]), len(res["rejected"]),
+            )
+        except Exception:
+            logger.exception("Дневная публикация сборок Регарда упала — попробую в следующий раз")
+        await asyncio.sleep(REGARD_RUN_INTERVAL)
 
 
 async def main():
@@ -627,6 +797,18 @@ async def main():
             "продолжаю с тем, что есть локально"
         )
 
+    try:
+        restored_pc = await download_feed(pc_feed.EXPORT_PATH, yandex_storage.PC_OBJECT_KEY)
+        logger.info(
+            "avito_export_pc.xlsx восстановлен из Yandex Storage" if restored_pc
+            else "ПК-фида в Yandex Storage ещё нет — начнём с шаблона при первой сборке"
+        )
+    except Exception:
+        logger.exception(
+            "Не удалось подтянуть avito_export_pc.xlsx из Yandex Storage — "
+            "продолжаю с тем, что есть локально"
+        )
+
     if avito_api.is_configured() and SYNC_INTERVAL > 0:
         asyncio.create_task(_sync_loop())
         logger.info("Автосинхрон статусов Avito включён: каждые %d сек", SYNC_INTERVAL)
@@ -634,6 +816,20 @@ async def main():
         logger.info(
             "Автосинхрон статусов Avito выключен (нет AVITO_CLIENT_ID/SECRET "
             "или AVITO_SYNC_INTERVAL=0) — доступна ручная команда /sync"
+        )
+
+    asyncio.create_task(_regard_loop())
+    logger.info(
+        "Дневная публикация сборок Регарда включена: до %d новых сборок в сутки "
+        "(первый запуск через %d сек)", REGARD_DAILY_LIMIT, REGARD_FIRST_RUN_DELAY,
+    )
+    if pc_sheets.is_configured():
+        # Таблицу могли настроить уже после первых публикаций — догоняем её фидом.
+        asyncio.create_task(pc_sheets.sync_all_from_feed())
+    else:
+        logger.info(
+            "GOOGLE_SHEET_ID_PC не задан — сборки Регарда пишутся только в фид, "
+            "без зеркала в Google Sheets"
         )
 
     await dp.start_polling(bot)
