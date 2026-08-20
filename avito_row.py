@@ -155,6 +155,20 @@ def _fmt_gb(value: str) -> str:
     return f"{int(v)} ГБ"
 
 
+_INTEGRATED_GPU_MARKERS = (
+    "iris", "uhd", "hd graphics", "gma",
+    "radeon graphics", "radeon(vega", "vega ",  # APU-графика AMD
+    "adreno", "apple gpu",
+)
+
+
+def _is_integrated_gpu(gpu: str) -> bool:
+    """True для интегрированной графики (делит память с ОЗУ): Iris Xe,
+    UHD Graphics, HD Graphics, Radeon Graphics (APU), Vega и т.п."""
+    g = gpu.lower()
+    return any(m in g for m in _INTEGRATED_GPU_MARKERS)
+
+
 def _gpu_vram_gb(vision_params: dict) -> str:
     """Валидный объём видеопамяти дискретной карты в ГБ ('2', '6') или ''.
     Принимает '2', '2 ГБ', '2GB'; отбрасывает мусор вне 1..32."""
@@ -243,6 +257,18 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
         vram = _gpu_vram_gb(vision_params)
         if vram:
             gpu_line += f" ({vram} ГБ)"
+        elif _is_integrated_gpu(gpu):
+            # Интегрированная графика делит память с ОЗУ; динамически берёт
+            # до половины установленной памяти — покажем это покупателю.
+            shared = ""
+            try:
+                ram_val = float(str(ram).split()[0])
+                half = ram_val / 2
+                shared = f"до {int(half)} ГБ из ОЗУ" if half == int(half) else f"до {half:g} ГБ из ОЗУ"
+            except (ValueError, TypeError, IndexError):
+                pass
+            note = f"интегрированная, {shared}" if shared else "интегрированная, использует ОЗУ"
+            gpu_line += f" ({note})"
         lines.append(gpu_line)
     if storage:
         storage_line = f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip()
