@@ -142,11 +142,26 @@ _DESC_OUTRO = (
 )
 
 
+def _fmt_gb(value: str) -> str:
+    """2048 -> '2 ТБ', 4096 -> '4 ТБ', 512 -> '512 ГБ', 48 -> '48 ГБ'."""
+    try:
+        v = float(str(value).strip())
+    except (ValueError, TypeError):
+        return str(value)
+    if v >= 1024:
+        tb = v / 1024
+        tb_str = f"{tb:.0f}" if tb == int(tb) else f"{tb:.1f}"
+        return f"{tb_str} ТБ"
+    return f"{int(v)} ГБ"
+
+
 def _spec_block(vision_params: dict, avito_answers: dict) -> str:
     """Технический блок описания. Видеокарта и циклы АКБ — только если распознаны.
-    Для памяти и накопителя указывается максимум возможного апгрейда, если он
-    распознан достоверно (поля max_ram_gb / max_storage_gb от GLM)."""
+    Процессор — с вилкой конфигураций модели (cpu_min..cpu_max), память и
+    накопитель — с максимумом апгрейда (SSD по умолчанию до 4 ТБ)."""
     cpu = vision_params.get("cpu", "").strip()
+    cpu_min = vision_params.get("cpu_min", "").strip()
+    cpu_max = vision_params.get("cpu_max", "").strip()
     gpu = vision_params.get("gpu", "").strip()
     ram = avito_answers.get("Объем оперативной памяти") or vision_params.get("ram_gb", "")
     storage = vision_params.get("storage_gb", "").strip()
@@ -163,27 +178,31 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
             ram_max = ""
     except (ValueError, TypeError):
         ram_max = ""
-    storage_max = vision_params.get("max_storage_gb", "").strip()
+    # SSD: если GLM не распознал максимум — по умолчанию 4 ТБ (современный M.2/NVMe).
+    storage_max = vision_params.get("max_storage_gb", "").strip() or "4096"
     try:
-        if storage_max and storage and float(storage_max) <= float(round_storage(storage)):
+        if storage and float(storage_max) <= float(round_storage(storage)):
             storage_max = ""
     except (ValueError, TypeError):
         storage_max = ""
 
     lines = []
     if cpu:
-        lines.append(f"Процессор: {cpu}")
+        cpu_line = f"Процессор: {cpu}"
+        if cpu_min and cpu_max and cpu_min != cpu_max:
+            cpu_line += f" (в линейке модели: от {cpu_min} до {cpu_max})"
+        lines.append(cpu_line)
     if ram:
         ram_line = f"Оперативная память: {ram} ГБ"
         if ram_max:
-            ram_line += f" (расширение до {ram_max} ГБ)"
+            ram_line += f" (расширение до {_fmt_gb(ram_max)})"
         lines.append(ram_line)
     if gpu:
         lines.append(f"Видеокарта: {gpu}")
     if storage:
         storage_line = f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip()
         if storage_max:
-            storage_line += f" (расширение до {storage_max} ГБ)"
+            storage_line += f" (расширение до {_fmt_gb(storage_max)})"
         lines.append(storage_line)
     if screen:
         screen_line = f"Экран: {screen}\""
