@@ -143,7 +143,9 @@ _DESC_OUTRO = (
 
 
 def _spec_block(vision_params: dict, avito_answers: dict) -> str:
-    """Технический блок описания. Видеокарта и циклы АКБ — только если распознаны."""
+    """Технический блок описания. Видеокарта и циклы АКБ — только если распознаны.
+    Для памяти и накопителя указывается максимум возможного апгрейда, если он
+    распознан достоверно (поля max_ram_gb / max_storage_gb от GLM)."""
     cpu = vision_params.get("cpu", "").strip()
     gpu = vision_params.get("gpu", "").strip()
     ram = avito_answers.get("Объем оперативной памяти") or vision_params.get("ram_gb", "")
@@ -154,15 +156,35 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
     os_name = avito_answers.get("Операционная система") or vision_params.get("os", "")
     cycles = vision_params.get("battery_cycle_count", "").strip()
 
+    # Максимумы апгрейда — только если больше текущего объёма (иначе бессмысленно).
+    ram_max = vision_params.get("max_ram_gb", "").strip()
+    try:
+        if ram_max and ram and float(ram_max) <= float(str(ram).split()[0]):
+            ram_max = ""
+    except (ValueError, TypeError):
+        ram_max = ""
+    storage_max = vision_params.get("max_storage_gb", "").strip()
+    try:
+        if storage_max and storage and float(storage_max) <= float(round_storage(storage)):
+            storage_max = ""
+    except (ValueError, TypeError):
+        storage_max = ""
+
     lines = []
     if cpu:
         lines.append(f"Процессор: {cpu}")
     if ram:
-        lines.append(f"Оперативная память: {ram} ГБ")
+        ram_line = f"Оперативная память: {ram} ГБ"
+        if ram_max:
+            ram_line += f" (расширение до {ram_max} ГБ)"
+        lines.append(ram_line)
     if gpu:
         lines.append(f"Видеокарта: {gpu}")
     if storage:
-        lines.append(f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip())
+        storage_line = f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip()
+        if storage_max:
+            storage_line += f" (расширение до {storage_max} ГБ)"
+        lines.append(storage_line)
     if screen:
         screen_line = f"Экран: {screen}\""
         if resolution:
