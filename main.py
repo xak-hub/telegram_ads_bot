@@ -651,16 +651,25 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if not device_photos:
         device_photos = images
 
-    # Фото для обложки — то, что Claude Vision счёл лучшим презентационным
-    # кадром (открыт, стоит прямо/чуть боком, экран виден). Если индекс не
-    # пришёл, невалиден или указывает на отфильтрованный скриншот — берём
-    # первое доступное фото устройства, как раньше.
+    # Фото для обложки — выбор GLM, но с подстраховкой: обложкой может стать
+    # только фото, где ноутбук ЦЕЛИКОМ в кадре (fully_in_frame). Если GLM
+    # выбрал обрезанное — берём первое «полное» фото устройства; если полных
+    # нет — первое доступное (лучше любое, чем пустое объявление).
+    fully = result.get("fully_in_frame", [])
+    full_photos = [
+        img for i, img in enumerate(images)
+        if i < len(fully) and fully[i] is True and img in device_photos
+    ]
     cover_photo = None
     cover_idx = result.get("cover_photo_index")
     if isinstance(cover_idx, int) and 1 <= cover_idx <= len(images):
         candidate = images[cover_idx - 1]
         if candidate in device_photos:
-            cover_photo = candidate
+            # обложка валидна, если фото полное ИЛИ полных фото нет вовсе
+            if not full_photos or candidate in full_photos:
+                cover_photo = candidate
+    if cover_photo is None and full_photos:
+        cover_photo = full_photos[0]
     if cover_photo is None and device_photos:
         cover_photo = device_photos[0]
 

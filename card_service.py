@@ -170,12 +170,55 @@ def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
     return _remove_bg_sync_rembg(image_bytes)
 
 
-async def _remove_bg(image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[bytes]:
-    """Убирает фон локально. Движок = BG_ENGINE из .env (rembg или
-    transparent-background). Возвращает PNG-байты с прозрачным фоном или None
-    при сбое. mime_type оставлен для совместимости с контрактом."""
+def _strip_stray_blobs(cutout_bytes: bytes) -> bytes:
+    """Убирает «отвалившиеся» куски, которые модель вырезки прихватила вместе
+    с товаром (куски стола, тени-обрывки, мусор): в альфа-канале оставляем
+    только крупные связные области — сам товар и его крупные части (например,
+    экран и базу, разделённые щелью шарнира), мелкие блобы стираем."""
     try:
-        return await asyncio.to_thread(_remove_bg_sync, image_bytes)
+        import numpy as np
+        from scipy import ndimage
+    except ImportError:
+        return cutout_bytes  # scipy недоступен — пропускаем очистку
+    try:
+        im = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+        alpha = np.array(im.split()[3])
+        mask = alpha > 100
+        if not mask.any():
+            return cutout_bytes
+        labeled, n = ndimage.label(mask, structure=np.ones((3, 3), dtype=int))
+        if n <= 1:
+            return cutout_bytes
+        sizes = ndimage.sum(mask, labeled, range(1, n + 1))
+        largest = sizes.max()
+        keep_ids = [i + 1 for i, s in enumerate(sizes) if s >= 0.10 * largest]
+        keep_mask = np.isin(labeled, keep_ids)
+        removed = int(sizes.sum() - sizes[keep_ids].sum())
+        if not keep_mask.all() and removed > 0:
+            new_alpha = np.where(keep_mask, alpha, 0).astype(np.uint8)
+            im.putalpha(Image.fromarray(new_alpha, "L"))
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            logger.info("Очистка вырезки: убрано мусорных пикселей %d (%d блобов из %d)",
+                        removed, n - len(keep_ids), n)
+            return buf.getvalue()
+        return cutout_bytes
+    except Exception:
+        logger.exception("Очистка блобов не удалась — отдаю как есть")
+        return cutout_bytes
+
+
+async def _remove_bg(image_bytes: bytes, mime_type: str = "image/jpeg") -> Optional[bytes]:
+    """Убирает фон локально. Движок = BG_ENGINE из .env (rembg / bria /
+    birefnet / transparent-background). Возвращает PNG-байты с прозрачным
+    фоном или None при сбое. Дополнительно вычищает «отвалившиеся» куски
+    (стол/тени) из результата любой модели. mime_type оставлен для
+    совместимости с контрактом."""
+    try:
+        out = await asyncio.to_thread(_remove_bg_sync, image_bytes)
+        if out:
+            out = await asyncio.to_thread(_strip_stray_blobs, out)
+        return out
     except Exception:
         logger.exception("Удаление фона не удалось (движок=%s)", _BG_ENGINE)
         return None
