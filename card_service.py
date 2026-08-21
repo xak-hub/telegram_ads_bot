@@ -170,6 +170,59 @@ def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
     return _remove_bg_sync_rembg(image_bytes)
 
 
+def _strip_attached_table(im: "Image.Image") -> "Image.Image":
+    """Убирает СВЯЗАННЫЙ с товаром кусок фона (стол/поверхность), который модель
+    вырезки прихватила: у самого края кадра фон точно прозрачный — берём его
+    цвет как эталон и распространяем («заливка») по непрозрачной зоне, пока
+    цвет похож. Стол, дотягивающийся до края кадра, вычищается; ноутбук
+    (другой цвет за явной границей) остаётся. Предохранитель: если заливка
+    грозит съесть >45% объекта — откатываемся, лучше стол, чем обрубок."""
+    try:
+        import numpy as np
+        from scipy import ndimage
+    except ImportError:
+        return im
+    try:
+        arr = np.array(im)
+        alpha = arr[..., 3]
+        opaque = alpha > 100
+        if not opaque.any():
+            return im
+        h, w = alpha.shape
+        m = max(2, int(0.02 * min(h, w)))  # полоска у края ~2% кадра
+        border = np.zeros_like(opaque)
+        border[:m, :] = opaque[:m, :]
+        border[-m:, :] = opaque[-m:, :]
+        border[:, :m] |= opaque[:, :m]
+        border[:, -m:] |= opaque[:, -m:]
+        if not border.any():
+            return im  # непрозрачное не касается краёв — нечего вычищать
+
+        rgb = arr[..., :3].astype(float)
+        med = np.median(rgb[border], axis=0)
+        # L1-расстояние до цвета фона; 90 — эмпирический порог похожести
+        similar = np.abs(rgb - med).sum(axis=2) < 90
+
+        reach = ndimage.binary_propagation(border, mask=opaque & similar)
+        # Предохранитель: заливка не должна съесть почти весь объект (случай
+        # «объект того же цвета, что фон»). До 75% — ок: стол бывает больше
+        # самого ноутбука.
+        if reach.sum() > 0.75 * opaque.sum():
+            logger.info("Заливка от краёв могла съесть объект (%.0f%%) — пропускаю",
+                        100.0 * reach.sum() / opaque.sum())
+            return im
+        if not reach.any():
+            return im
+        new_alpha = np.where(reach, 0, alpha).astype(np.uint8)
+        logger.info("Заливка от краёв: убрано %d пикселей приклеенного фона",
+                    int(reach.sum()))
+        im.putalpha(Image.fromarray(new_alpha, "L"))
+        return im
+    except Exception:
+        logger.exception("Заливка приклеенного фона не удалась — отдаю как есть")
+        return im
+
+
 def _strip_stray_blobs(cutout_bytes: bytes) -> bytes:
     """Убирает «отвалившиеся» куски, которые модель вырезки прихватила вместе
     с товаром (куски стола, тени-обрывки, мусор): в альфа-канале оставляем
@@ -182,27 +235,31 @@ def _strip_stray_blobs(cutout_bytes: bytes) -> bytes:
         return cutout_bytes  # scipy недоступен — пропускаем очистку
     try:
         im = Image.open(io.BytesIO(cutout_bytes)).convert("RGBA")
+        im = _strip_attached_table(im)
         alpha = np.array(im.split()[3])
         mask = alpha > 100
         if not mask.any():
-            return cutout_bytes
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            return buf.getvalue()
         labeled, n = ndimage.label(mask, structure=np.ones((3, 3), dtype=int))
         if n <= 1:
-            return cutout_bytes
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            return buf.getvalue()
         sizes = ndimage.sum(mask, labeled, range(1, n + 1))
         largest = sizes.max()
         keep_ids = [i + 1 for i, s in enumerate(sizes) if s >= 0.10 * largest]
         keep_mask = np.isin(labeled, keep_ids)
         removed = int(sizes.sum() - sizes[keep_ids].sum())
-        if not keep_mask.all() and removed > 0:
-            new_alpha = np.where(keep_mask, alpha, 0).astype(np.uint8)
-            im.putalpha(Image.fromarray(new_alpha, "L"))
-            buf = io.BytesIO()
-            im.save(buf, format="PNG")
+        new_alpha = np.where(keep_mask, alpha, 0).astype(np.uint8)
+        im.putalpha(Image.fromarray(new_alpha, "L"))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        if removed > 0:
             logger.info("Очистка вырезки: убрано мусорных пикселей %d (%d блобов из %d)",
                         removed, n - len(keep_ids), n)
-            return buf.getvalue()
-        return cutout_bytes
+        return buf.getvalue()
     except Exception:
         logger.exception("Очистка блобов не удалась — отдаю как есть")
         return cutout_bytes
