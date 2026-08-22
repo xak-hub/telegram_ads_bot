@@ -171,55 +171,70 @@ def _remove_bg_sync(image_bytes: bytes) -> Optional[bytes]:
 
 
 def _strip_attached_table(im: "Image.Image") -> "Image.Image":
-    """Убирает СВЯЗАННЫЙ с товаром кусок фона (стол/поверхность), который модель
-    вырезки прихватила: у самого края кадра фон точно прозрачный — берём его
-    цвет как эталон и распространяем («заливка») по непрозрачной зоне, пока
-    цвет похож. Стол, дотягивающийся до края кадра, вычищается; ноутбук
-    (другой цвет за явной границей) остаётся. Предохранитель: если заливка
-    грозит съесть >45% объекта — откатываемся, лучше стол, чем обрубок."""
+    """Срезает «нижнюю плиту» — кусок стола/поверхности, приклеенный моделью
+    вырезки к нижней части товара. Стол — это горизонтальная плита снизу
+    силуэта, по цвету заметно отличающаяся от корпуса. Идём от самой нижней
+    строки силуэта вверх: пока большинство непрозрачных пикселей ряда
+    «чужого» цвета (L1 до цвета корпуса >= 90) — ряд срезаем целиком,
+    останавливаемся на первом ряду корпуса. Цвет корпуса — медиана пикселей
+    центральной полосы силуэта (сам товар). Предохранители: не срезаем
+    больше 45% объекта; игнорируем «чужие» ряды, если их суммарно < 3% (шум
+    края) — чтобы не трогать чистые вырезки."""
     try:
         import numpy as np
-        from scipy import ndimage
     except ImportError:
         return im
     try:
         arr = np.array(im)
         alpha = arr[..., 3]
         opaque = alpha > 100
-        if not opaque.any():
+        ys, _ = np.where(opaque)
+        if ys.size == 0:
             return im
-        h, w = alpha.shape
-        m = max(2, int(0.02 * min(h, w)))  # полоска у края ~2% кадра
-        border = np.zeros_like(opaque)
-        border[:m, :] = opaque[:m, :]
-        border[-m:, :] = opaque[-m:, :]
-        border[:, :m] |= opaque[:, :m]
-        border[:, -m:] |= opaque[:, -m:]
-        if not border.any():
-            return im  # непрозрачное не касается краёв — нечего вычищать
+        y0, y1 = int(ys.min()), int(ys.max())
+        h_obj = y1 - y0 + 1
+        if h_obj < 20:
+            return im
 
         rgb = arr[..., :3].astype(float)
-        med = np.median(rgb[border], axis=0)
-        # L1-расстояние до цвета фона; 90 — эмпирический порог похожести
-        similar = np.abs(rgb - med).sum(axis=2) < 90
+        # Цвет корпуса: медиана пикселей центральной полосы силуэта.
+        band = opaque[y0 + int(0.25 * h_obj): y1 - int(0.25 * h_obj) + 1]
+        band_rgb = rgb[y0 + int(0.25 * h_obj): y1 - int(0.25 * h_obj) + 1][band]
+        if band_rgb.size == 0:
+            return im
+        core = np.median(band_rgb, axis=0)
 
-        reach = ndimage.binary_propagation(border, mask=opaque & similar)
-        # Предохранитель: заливка не должна съесть почти весь объект (случай
-        # «объект того же цвета, что фон»). До 75% — ок: стол бывает больше
-        # самого ноутбука.
-        if reach.sum() > 0.75 * opaque.sum():
-            logger.info("Заливка от краёв могла съесть объект (%.0f%%) — пропускаю",
-                        100.0 * reach.sum() / opaque.sum())
+        def row_is_foreign(y: int) -> bool:
+            row = opaque[y]
+            n = int(row.sum())
+            if n < 5:
+                return False
+            px = rgb[y][row]
+            similar = (np.abs(px - core).sum(axis=1) < 90)
+            return similar.mean() < 0.35  # <35% пикселей ряда — цвет корпуса
+
+        # Идём снизу вверх, собираем «чужие» ряды (срез), до первого ряда корпуса.
+        cut_rows = []
+        for y in range(y1, y0, -1):
+            if row_is_foreign(y):
+                cut_rows.append(y)
+            else:
+                break
+        if not cut_rows:
             return im
-        if not reach.any():
-            return im
-        new_alpha = np.where(reach, 0, alpha).astype(np.uint8)
-        logger.info("Заливка от краёв: убрано %d пикселей приклеенного фона",
-                    int(reach.sum()))
-        im.putalpha(Image.fromarray(new_alpha, "L"))
+        n_cut = sum(int(opaque[y].sum()) for y in cut_rows)
+        if n_cut > 0.45 * opaque.sum() or n_cut < 0.03 * opaque.sum():
+            return im  # слишком много (это не стол) или шум края — не трогаем
+
+        new_alpha = alpha.copy()
+        for y in cut_rows:
+            new_alpha[y][opaque[y]] = 0
+        logger.info("Срез нижней плиты: убрано %d px в %d рядах (до y=%d)",
+                    n_cut, len(cut_rows), cut_rows[0])
+        im.putalpha(Image.fromarray(new_alpha.astype(np.uint8), "L"))
         return im
     except Exception:
-        logger.exception("Заливка приклеенного фона не удалась — отдаю как есть")
+        logger.exception("Срез нижней плиты не удался — отдаю как есть")
         return im
 
 
