@@ -651,15 +651,22 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if not device_photos:
         device_photos = images
 
-    # Фото для обложки — выбор GLM, но с подстраховкой: обложкой может стать
-    # только фото, где ноутбук ЦЕЛИКОМ в кадре (fully_in_frame). Если GLM
-    # выбрал обрезанное — берём первое «полное» фото устройства; если полных
-    # нет — первое доступное (лучше любое, чем пустое объявление).
+    # Фото с ОБРЕЗАННЫМ ноутбуком (fully_in_frame=false) в объявление не идут
+    # ВООБЩЕ — только «полные» кадры. Если полных нет — откатываемся на все
+    # фото устройства (лучше любое, чем пустое объявление).
     fully = result.get("fully_in_frame", [])
     full_photos = [
         img for i, img in enumerate(images)
         if i < len(fully) and fully[i] is True and img in device_photos
     ]
+    if full_photos and len(full_photos) < len(device_photos):
+        dropped = len(device_photos) - len(full_photos)
+        logger.info("Убираю из объявления %d фото с обрезанным ноутбуком", dropped)
+        device_photos = full_photos
+
+    # Обложка — самое качественное «полное» фото по выбору GLM. Если GLM
+    # выбрал фото вне списка полных (или невалидный индекс) — берём первое
+    # полное; если полных нет — первое доступное.
     cover_photo = None
     cover_idx = result.get("cover_photo_index")
     if isinstance(cover_idx, int) and 1 <= cover_idx <= len(images):
