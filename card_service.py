@@ -447,18 +447,13 @@ def _card_specs(p: dict) -> list[Spec]:
     return [Spec(icon, text) for icon, text in zip(_SPEC_ICONS, texts)]
 
 
-def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec]) -> bytes:
+def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec],
+                      tags: list) -> bytes:
     with tempfile.TemporaryDirectory() as d:
         cut_path = os.path.join(d, "cutout.png")
         out_path = os.path.join(d, "card.png")
         with open(cut_path, "wb") as f:
             f.write(cutout_bytes)
-        # Чипы «сенсорный»/«трансформер» на карточке — по распознанным флагам.
-        tags = []
-        if str(vision_params.get("touchscreen", "")).strip().lower() == "да":
-            tags.append("сенсорный")
-        if str(vision_params.get("transformer", "")).strip().lower() == "да":
-            tags.append("трансформер")
         generate_card(CardConfig(
             product_cutout_path=cut_path,
             title=title,
@@ -528,9 +523,15 @@ async def build_card(vision_params: dict, product_image_bytes: bytes,
     model = vision_params.get("model", "").strip()
     title = f"{brand} {model}".strip() or "Ноутбук"
     specs = _card_specs(vision_params)
+    # Чипы «сенсорный»/«трансформер» на карточке — по упоминаниям в тексте.
+    tags = []
+    if str(vision_params.get("touchscreen", "")).strip().lower() == "да":
+        tags.append("сенсорный")
+    if str(vision_params.get("transformer", "")).strip().lower() == "да":
+        tags.append("трансформер")
 
     try:
-        return await asyncio.to_thread(_render_card_sync, cutout, title, specs)
+        return await asyncio.to_thread(_render_card_sync, cutout, title, specs, tags)
     except Exception:
         logger.exception("Генерация карточки не удалась")
         return None
