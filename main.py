@@ -3,6 +3,7 @@ import fcntl
 import logging
 import os
 import sys
+from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -651,34 +652,31 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if not device_photos:
         device_photos = images
 
-    # Фото с ОБРЕЗАННЫМ ноутбуком (fully_in_frame=false) в объявление не идут
-    # ВООБЩЕ — только «полные» кадры. Если полных нет — откатываемся на все
-    # фото устройства (лучше любое, чем пустое объявление).
-    fully = result.get("fully_in_frame", [])
-    full_photos = [
-        img for i, img in enumerate(images)
-        if i < len(fully) and fully[i] is True and img in device_photos
-    ]
-    if full_photos and len(full_photos) < len(device_photos):
-        dropped = len(device_photos) - len(full_photos)
-        logger.info("Убираю из объявления %d фото с обрезанным ноутбуком", dropped)
-        device_photos = full_photos
+    # ВСЕ фото устройства идут в объявление (как и было изначально) —
+    # эксперименты с удалением «обрезанных» отключены: и GLM, и локальный
+    # детектор ошибались и удаляли ценные кадры. Вырезаем каждое фото один
+    # раз и переиспользуем cutout для галереи и карточки (без повторной
+    # вырезки). Обрезанность только логируем, для статистики.
+    cutouts: dict[tuple[bytes, str], Optional[bytes]] = {}
+    if mode == "full":
+        await _progress(2, current=True, extra="подготовка фото", recognized=recognized)
+        for photo in device_photos:
+            cut = await card_service._remove_bg(photo[0], photo[1])
+            cutouts[photo] = cut
+            if cut and card_service.is_cropped_by_frame(cut):
+                logger.info("Статистика: фото обрезано кадром (в объявлении остаётся)")
 
-    # Обложка — самое качественное «полное» фото по выбору GLM. Если GLM
-    # выбрал фото вне списка полных (или невалидный индекс) — берём первое
-    # полное; если полных нет — первое доступное.
+    # Обложка — лучший презентационный кадр по выбору GLM (валиден, только
+    # если это фото устройства, не скриншот); иначе первое фото устройства.
     cover_photo = None
     cover_idx = result.get("cover_photo_index")
     if isinstance(cover_idx, int) and 1 <= cover_idx <= len(images):
         candidate = images[cover_idx - 1]
         if candidate in device_photos:
-            # обложка валидна, если фото полное ИЛИ полных фото нет вовсе
-            if not full_photos or candidate in full_photos:
-                cover_photo = candidate
-    if cover_photo is None and full_photos:
-        cover_photo = full_photos[0]
+            cover_photo = candidate
     if cover_photo is None and device_photos:
         cover_photo = device_photos[0]
+    cover_cutout = cutouts.get(cover_photo) if cover_photo else None
 
     listing_id = make_listing_id()
 
@@ -686,7 +684,16 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     listing_photos: list[tuple[bytes, str]] = []
     try:
         await _progress(3, current=True, extra=f"{len(device_photos)} фото", recognized=recognized)
-        listing_photos = await card_service.remove_backgrounds(device_photos) if mode == "full" else device_photos
+        if mode == "full":
+            for photo in device_photos:
+                cut = cutouts.get(photo)
+                composed = await card_service.compose_listing_from_cutout(cut) if cut else None
+                if composed is not None:
+                    listing_photos.append((composed, "image/jpeg"))
+                else:
+                    listing_photos.append(photo)
+        else:
+            listing_photos = device_photos
         photo_urls = await yandex_storage.upload_photos(listing_photos, listing_id)
     except Exception as e:
         logger.exception("Photo upload to Yandex Storage failed")
@@ -705,7 +712,8 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             if cover_photo:
                 await _progress(4, current=True, recognized=recognized)
                 card_bytes = await card_service.build_card(
-                    result.get("parameters", {}), cover_photo[0], cover_photo[1]
+                    result.get("parameters", {}), cover_photo[0], cover_photo[1],
+                    cutout_bytes=cover_cutout,
                 )
                 if card_bytes:
                     card_url = await yandex_storage.upload_photo(

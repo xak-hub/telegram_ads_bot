@@ -464,12 +464,56 @@ def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec]) -> byt
             return f.read()
 
 
+def is_cropped_by_frame(cutout_bytes: bytes) -> bool:
+    """True, если вырезанный объект упирается в край КАДРА (обрезан).
+    Детерминированная проверка по альфа-каналу: если на внешней кромке
+    изображения (полосы в 3px сверху/снизу/слева/справа) достаточно
+    непрозрачных пикселей — объект касается границы кадра, значит обрезан.
+    Порог: >0.5% пикселей стороны (шум края в пару пикселей не считается)."""
+    try:
+        import numpy as np
+        alpha = np.array(Image.open(io.BytesIO(cutout_bytes)).convert("RGBA").split()[3])
+        h, w = alpha.shape
+        if h < 10 or w < 10:
+            return False
+        b = 3
+        opaque = alpha > 100
+        sides = {
+            "top": opaque[:b, :],
+            "bottom": opaque[-b:, :],
+            "left": opaque[:, :b],
+            "right": opaque[:, -b:],
+        }
+        for name, band in sides.items():
+            denom = band.size
+            if denom and band.sum() > 0.005 * denom and band.sum() >= 20:
+                logger.info("Фото обрезано кадром: сторона %s, %d px на кромке",
+                            name, int(band.sum()))
+                return True
+        return False
+    except Exception:
+        logger.exception("Проверка обрезанности не удалась — считаю фото целым")
+        return False
+
+
+async def compose_listing_from_cutout(cutout_bytes: bytes) -> Optional[bytes]:
+    """Компонует фото объявления из ГОТОВОГО cutout (без повторной вырезки).
+    None — если компоновка упала (вызывающий подставит исходник)."""
+    try:
+        return await asyncio.to_thread(_compose_listing_photo, cutout_bytes, LISTING_PHOTO_SIZE)
+    except Exception:
+        logger.exception("Не удалось собрать фото из cutout")
+        return None
+
+
 async def build_card(vision_params: dict, product_image_bytes: bytes,
-                     mime_type: str = "image/jpeg") -> Optional[bytes]:
-    """Полный цикл: убрать фон + нарисовать карточку. Возвращает PNG-байты или
-    None (нет ключа / не получилось). Рисование — в отдельном потоке, чтобы не
-    блокировать event loop бота."""
-    cutout = await _remove_bg(product_image_bytes, mime_type)
+                     mime_type: str = "image/jpeg",
+                     cutout_bytes: Optional[bytes] = None) -> Optional[bytes]:
+    """Полный цикл: убрать фон + нарисовать карточку. cutout_bytes — уже
+    готовая вырезка (чтобы не вырезать одно фото дважды). Возвращает PNG-байты
+    или None (нет ключа / не получилось). Рисование — в отдельном потоке,
+    чтобы не блокировать event loop бота."""
+    cutout = cutout_bytes if cutout_bytes else await _remove_bg(product_image_bytes, mime_type)
     if cutout is None:
         return None
 
