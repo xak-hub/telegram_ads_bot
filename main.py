@@ -741,9 +741,18 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     if detected.get(questionnaire._COLOR_FIELD["avito_column"]):
         detected_bits.append(detected[questionnaire._COLOR_FIELD["avito_column"]])
 
+    # Префиксы «сенсорный»/«трансформер» — в заголовок Авито (= текст «Вижу:»).
+    prefix_bits = []
+    if p.get("touchscreen", "").strip().lower() == "да":
+        prefix_bits.append("Сенсорный")
+    if p.get("transformer", "").strip().lower() == "да":
+        prefix_bits.append("трансформер")
+    prefix = " ".join(prefix_bits)
     seen = ", ".join(
         x for x in [p.get("brand"), p.get("model"), p.get("cpu"), p.get("gpu"), *detected_bits] if x
     )
+    if prefix:
+        seen = f"{prefix} {seen}".strip()
     await status.edit_text(f"Вижу: {seen or 'ноутбук'}.")
 
     # Заголовок объявления на Avito = текст из «Вижу:». Пробрасываем через vision.

@@ -142,19 +142,6 @@ _DESC_OUTRO = (
 )
 
 
-def _fmt_gb(value: str) -> str:
-    """2048 -> '2 ТБ', 4096 -> '4 ТБ', 512 -> '512 ГБ', 48 -> '48 ГБ'."""
-    try:
-        v = float(str(value).strip())
-    except (ValueError, TypeError):
-        return str(value)
-    if v >= 1024:
-        tb = v / 1024
-        tb_str = f"{tb:.0f}" if tb == int(tb) else f"{tb:.1f}"
-        return f"{tb_str} ТБ"
-    return f"{int(v)} ГБ"
-
-
 _INTEGRATED_GPU_MARKERS = (
     "iris", "uhd", "hd graphics", "gma",
     "radeon graphics", "radeon(vega", "vega ",  # APU-графика AMD
@@ -212,9 +199,10 @@ def _cpu_freq_suffix(vision_params: dict) -> str:
 
 
 def _spec_block(vision_params: dict, avito_answers: dict) -> str:
-    """Технический блок описания. Видеокарта и циклы АКБ — только если распознаны.
-    Процессор — с вилкой частот (базовая..Turbo), память и накопитель —
-    с максимумом апгрейда (SSD по умолчанию до 4 ТБ)."""
+    """Технический блок описания — только факты с фото/подписи. Процессор —
+    с вилкой частот (базовая..Turbo), видеокарта — с объёмом/типом памяти,
+    экран — с пометкой «сенсорный», для трансформера — форм-фактор.
+    Максимумы апгрейда RAM/SSD НЕ указываем: их источник был ненадёжен."""
     cpu = vision_params.get("cpu", "").strip()
     gpu = vision_params.get("gpu", "").strip()
     ram = avito_answers.get("Объем оперативной памяти") or vision_params.get("ram_gb", "")
@@ -224,21 +212,8 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
     resolution = vision_params.get("screen_resolution", "").strip()
     os_name = avito_answers.get("Операционная система") or vision_params.get("os", "")
     cycles = vision_params.get("battery_cycle_count", "").strip()
-
-    # Максимумы апгрейда — только если больше текущего объёма (иначе бессмысленно).
-    ram_max = vision_params.get("max_ram_gb", "").strip()
-    try:
-        if ram_max and ram and float(ram_max) <= float(str(ram).split()[0]):
-            ram_max = ""
-    except (ValueError, TypeError):
-        ram_max = ""
-    # SSD: если GLM не распознал максимум — по умолчанию 4 ТБ (современный M.2/NVMe).
-    storage_max = vision_params.get("max_storage_gb", "").strip() or "4096"
-    try:
-        if storage and float(storage_max) <= float(round_storage(storage)):
-            storage_max = ""
-    except (ValueError, TypeError):
-        storage_max = ""
+    touchscreen = vision_params.get("touchscreen", "").strip().lower() == "да"
+    transformer = vision_params.get("transformer", "").strip().lower() == "да"
 
     lines = []
     if cpu:
@@ -248,10 +223,7 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
             cpu_line += f" {freq}"
         lines.append(cpu_line)
     if ram:
-        ram_line = f"Оперативная память: {ram} ГБ"
-        if ram_max:
-            ram_line += f" (расширение до {_fmt_gb(ram_max)})"
-        lines.append(ram_line)
+        lines.append(f"Оперативная память: {ram} ГБ")
     if gpu:
         gpu_line = f"Видеокарта: {gpu}"
         vram = _gpu_vram_gb(vision_params)
@@ -271,15 +243,16 @@ def _spec_block(vision_params: dict, avito_answers: dict) -> str:
             gpu_line += f" ({note})"
         lines.append(gpu_line)
     if storage:
-        storage_line = f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip()
-        if storage_max:
-            storage_line += f" (расширение до {_fmt_gb(storage_max)})"
-        lines.append(storage_line)
+        lines.append(f"Накопитель: {storage_type} {round_storage(storage)} ГБ".strip())
     if screen:
         screen_line = f"Экран: {screen}\""
         if resolution:
             screen_line += f", {resolution}px"
+        if touchscreen:
+            screen_line += ", сенсорный"
         lines.append(screen_line)
+    if transformer:
+        lines.append("Форм-фактор: трансформер, экран поворачивается на 360°")
     if os_name:
         lines.append(f"ОС: {os_name}")
     if cycles:
@@ -316,11 +289,14 @@ def _build_title(vision_params: dict, avito_answers: dict) -> str:
     storage = vision_params.get("storage_gb", "").strip()
     storage_type = avito_answers.get("Конфигурация накопителей", "").strip()
     touchscreen = vision_params.get("touchscreen", "").strip().lower() == "да"
+    transformer = vision_params.get("transformer", "").strip().lower() == "да"
     lte = vision_params.get("lte", "").strip().lower() == "да"
 
     head_parts = []
     if touchscreen:
         head_parts.append("Сенсорный")
+    if transformer:
+        head_parts.append("трансформер")
     brand_model = f"{brand} {model}".strip()
     if brand_model:
         head_parts.append(brand_model)

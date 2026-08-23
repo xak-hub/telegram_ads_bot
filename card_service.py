@@ -453,12 +453,19 @@ def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec]) -> byt
         out_path = os.path.join(d, "card.png")
         with open(cut_path, "wb") as f:
             f.write(cutout_bytes)
+        # Чипы «сенсорный»/«трансформер» на карточке — по распознанным флагам.
+        tags = []
+        if str(vision_params.get("touchscreen", "")).strip().lower() == "да":
+            tags.append("сенсорный")
+        if str(vision_params.get("transformer", "")).strip().lower() == "да":
+            tags.append("трансформер")
         generate_card(CardConfig(
             product_cutout_path=cut_path,
             title=title,
             specs=specs,
             badges=[Badge(icon, text) for icon, text in _BADGES],
             output_path=out_path,
+            tags=tags,
         ))
         with open(out_path, "rb") as f:
             return f.read()
