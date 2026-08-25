@@ -74,6 +74,10 @@ PHOTO_ANIM_TASKS: dict[int, asyncio.Task] = {}
 # пользователь не нажмёт одну из них. chat_id -> {"photos", "notes", "message"}.
 PENDING_MODE: dict[int, dict] = {}
 
+# /upgrade <SSD-ГБ> <цена> — ждёт фото для «варианта с установленным SSD»:
+# те же параметры, но накопитель больше и цена выше. chat_id -> {"storage_gb","price"}.
+UPGRADE_PENDING: dict[int, dict] = {}
+
 
 def _mode_keyboard() -> InlineKeyboardMarkup:
     # Каждая кнопка на своей строке — крупнее и заметнее, чем в один ряд.
@@ -133,6 +137,7 @@ async def _auto_start_later(chat_id: int, anchor_message: Message) -> None:
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     COLLECTING.pop(message.chat.id, None)
+    UPGRADE_PENDING.pop(message.chat.id, None)
     # Сбрасываем зависшие состояния предпоказа/анкеты, чтобы /start начинал чисто.
     questionnaire.PREVIEW_PENDING.pop(message.chat.id, None)
     questionnaire.SESSIONS.pop(message.chat.id, None)
@@ -163,6 +168,7 @@ async def cmd_help(message: Message):
         "Ноутбуки:\n"
         "/start — начать работу / сброс сессии\n"
         "/done — обработать присланные фото сразу\n"
+        "/upgrade <SSD-ГБ> <цена> — вариант с установленным SSD (фото следом)\n"
         "/defaults — значения по умолчанию (адрес, состояние и т.д.)\n"
         "/feed — список объявлений в фиде\n"
         "/sold <№ или ID> — убрать проданное из фида (Авито уберёт из кабинета)\n"
@@ -271,6 +277,42 @@ async def cmd_sold(message: Message):
             f"⚠️ Убрал локально ({removed}), но фид не перезалился: {e}\n"
             "Перезалей вручную или повтори /sold с этими ID позже."
         )
+
+
+@dp.message(Command("upgrade"))
+async def cmd_upgrade(message: Message):
+    """Вариант ноутбука с установленным бОльшим SSD и новой ценой:
+    /upgrade <SSD-ГБ> <цена-₽>, затем прислать фото того же ноутбука.
+    Старое объявление НЕ снимается — публикуется дополнительный вариант
+    (тот же товар, опция установки SSD). Цена автоподтвердится, анкета
+    вопроса про цену не задаст."""
+    args = message.text.split()[1:]
+    if len(args) < 2:
+        await message.answer(
+            "Формат: /upgrade <SSD-ГБ> <цена>\n"
+            "Например: /upgrade 1024 55000 — затем пришли фото ноутбука."
+        )
+        return
+    try:
+        ssd = int(args[0].replace(" ", ""))
+        price = int(args[1].replace(" ", ""))
+        if not (64 <= ssd <= 8192) or price <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "Не понял числа. Формат: /upgrade <SSD-ГБ> <цена>, "
+            "например /upgrade 1024 55000"
+        )
+        return
+    UPGRADE_PENDING[message.chat.id] = {"storage_gb": str(ssd), "price": str(price)}
+    await message.answer(
+        f"🆙 Режим апгрейда: SSD {ssd} ГБ, цена {price:,} ₽.".replace(",", " ")
+        + "\nПришли фото этого же ноутбука — опубликую вариант с установленным "
+        "SSD. Старое объявление не трогаю."
+    )
+
+
+
 
 
 @dp.message(Command("regard"))
@@ -635,6 +677,18 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             f"и/или текстом уточни:\n{questions}\n\nЗатем снова /done."
         )
         return
+
+    # Режим /upgrade: тот же ноутбук, но с установленным бОльшим SSD и новой
+    # ценой (объявление-«вариант», старое не снимается). Оверрайдим параметры
+    # после распознавания: цена автоподтвердится в анкете, SSD попадёт в
+    # карточку/описание/заголовок.
+    upgrade = UPGRADE_PENDING.pop(anchor_message.chat.id, None)
+    if upgrade:
+        params = result.setdefault("parameters", {})
+        params["storage_gb"] = upgrade["storage_gb"]
+        params["price"] = upgrade["price"]
+        logger.info("Апгрейд-вариант: SSD %s ГБ, цена %s ₽",
+                    upgrade["storage_gb"], upgrade["price"])
 
     recognized = _format_recognized(result.get("parameters", {}))
     await _progress(2, recognized=recognized)
