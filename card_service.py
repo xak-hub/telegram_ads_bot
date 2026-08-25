@@ -447,8 +447,7 @@ def _card_specs(p: dict) -> list[Spec]:
     return [Spec(icon, text) for icon, text in zip(_SPEC_ICONS, texts)]
 
 
-def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec],
-                      tags: list) -> bytes:
+def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec]) -> bytes:
     with tempfile.TemporaryDirectory() as d:
         cut_path = os.path.join(d, "cutout.png")
         out_path = os.path.join(d, "card.png")
@@ -460,7 +459,6 @@ def _render_card_sync(cutout_bytes: bytes, title: str, specs: list[Spec],
             specs=specs,
             badges=[Badge(icon, text) for icon, text in _BADGES],
             output_path=out_path,
-            tags=tags,
         ))
         with open(out_path, "rb") as f:
             return f.read()
@@ -521,17 +519,19 @@ async def build_card(vision_params: dict, product_image_bytes: bytes,
 
     brand = vision_params.get("brand", "").strip()
     model = vision_params.get("model", "").strip()
-    title = f"{brand} {model}".strip() or "Ноутбук"
-    specs = _card_specs(vision_params)
-    # Чипы «сенсорный»/«трансформер» на карточке — по упоминаниям в тексте.
-    tags = []
+    # «Сенсорный»/«трансформер» — в строку заголовка тем же стилем (по
+    # упоминанию в тексте); при переносе генератор уменьшит шрифт.
+    prefix_words = []
     if str(vision_params.get("touchscreen", "")).strip().lower() == "да":
-        tags.append("сенсорный")
+        prefix_words.append("Сенсорный")
     if str(vision_params.get("transformer", "")).strip().lower() == "да":
-        tags.append("трансформер")
+        prefix_words.append("трансформер")
+    brand_model = f"{brand} {model}".strip()
+    title = (" ".join(prefix_words) + " " + brand_model).strip() or "Ноутбук"
+    specs = _card_specs(vision_params)
 
     try:
-        return await asyncio.to_thread(_render_card_sync, cutout, title, specs, tags)
+        return await asyncio.to_thread(_render_card_sync, cutout, title, specs)
     except Exception:
         logger.exception("Генерация карточки не удалась")
         return None

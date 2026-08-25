@@ -131,11 +131,6 @@ class CardConfig:
     output_path: str
     logo_path: str = DEFAULT_LOGO_PATH
     canvas_size: Tuple[int, int] = (CANVAS_W, CANVAS_H)
-    tags: List[str] = None                 # чипы под заголовком: «сенсорный», «трансформер»
-
-    def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
 
 
 # ---------------------------------------------------------------------------
@@ -243,9 +238,12 @@ def generate_card(config: CardConfig) -> str:
     canvas.alpha_composite(logo, (W - LOGO_MARGIN - logo.width, LOGO_MARGIN))
 
     # ===================== ЗАГОЛОВОК: сверху, по центру ====================
+    # Всегда в ОДНУ строку: если не помещается — шрифт уменьшается (вплоть
+    # до min_size в _wrap_title), без переноса на вторую строку.
     title_max_w = W - 2 * LOGO_MARGIN
     title_font, title_lines = _wrap_title(
-        draw, config.title, FONT_BOLD_PATH, TITLE_FONT_SIZE, title_max_w, TITLE_LINE_GAP)
+        draw, config.title, FONT_BOLD_PATH, TITLE_FONT_SIZE, title_max_w,
+        TITLE_LINE_GAP, max_lines=1)
     line_h = title_font.size + TITLE_LINE_GAP
     title_block_h = line_h * len(title_lines)
     ty = TITLE_TOP
@@ -253,28 +251,7 @@ def generate_card(config: CardConfig) -> str:
         lw = title_font.getlength(line)
         draw.text(((W - lw) / 2, ty), line, font=title_font, fill=TITLE_COLOR)
         ty += line_h
-
-    # ===================== ЧИПЫ: «сенсорный», «трансформер» ================
-    # Скруглённые плашки под заголовком, по центру; сдвигают характеристики.
-    chip_h = 0
-    if config.tags:
-        tag_font = ImageFont.truetype(FONT_THIN_PATH, 26)
-        pad_x, pad_y, gap = 14, 8, 12
-        chip_h = 26 + 2 * pad_y
-        widths = [tag_font.getlength(t) + 2 * pad_x for t in config.tags]
-        total = sum(widths) + gap * (len(config.tags) - 1)
-        x = (W - total) / 2
-        y = ty + 6
-        for t, wch in zip(config.tags, widths):
-            draw.rounded_rectangle(
-                [x, y, x + wch, y + chip_h], radius=chip_h // 2,
-                fill=(82, 33, 33, 235))
-            tb = draw.textbbox((0, 0), t, font=tag_font)
-            draw.text((x + pad_x, y + (chip_h - (tb[3] - tb[1])) / 2 - tb[1]),
-                      t, font=tag_font, fill=(255, 255, 255))
-            x += wch + gap
-
-    specs_top = max(SPEC_TOP_Y, ty + chip_h + 10)
+    specs_top = SPEC_TOP_Y
 
     # ===================== ХАРАКТЕРИСТИКИ: 2 колонки =======================
     # Разбиваем список характеристик на 2 колонки: первая половина — в левую,
