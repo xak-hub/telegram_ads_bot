@@ -25,7 +25,7 @@ import pc_sheets
 import regard_publisher
 from claude_vision import analyze_photo
 from avito_row import make_listing_id
-from avito_export import EXPORT_PATH, list_listing_ids, remove_listings
+from avito_export import EXPORT_PATH, list_listing_ids, remove_listings, get_listing_row
 from avito_sync import sync_removed_from_avito
 from yandex_storage import download_feed
 
@@ -168,7 +168,7 @@ async def cmd_help(message: Message):
         "Ноутбуки:\n"
         "/start — начать работу / сброс сессии\n"
         "/done — обработать присланные фото сразу\n"
-        "/upgrade <SSD-ГБ> <цена> — вариант с установленным SSD (фото следом)\n"
+        "/upgrade <ID> <SSD> <цена> [RAM] — клон с бОльшим SSD/RAM (фото следом)\n"
         "/defaults — значения по умолчанию (адрес, состояние и т.д.)\n"
         "/feed — список объявлений в фиде\n"
         "/sold <№ или ID> — убрать проданное из фида (Авито уберёт из кабинета)\n"
@@ -281,34 +281,89 @@ async def cmd_sold(message: Message):
 
 @dp.message(Command("upgrade"))
 async def cmd_upgrade(message: Message):
-    """Вариант ноутбука с установленным бОльшим SSD и новой ценой:
-    /upgrade <SSD-ГБ> <цена-₽>, затем прислать фото того же ноутбука.
-    Старое объявление НЕ снимается — публикуется дополнительный вариант
-    (тот же товар, опция установки SSD). Цена автоподтвердится, анкета
-    вопроса про цену не задаст."""
+    """Вариант ноутбука с бОльшим SSD/RAM и новой ценой — КЛОН существующего
+    объявления по ID, без повторного распознавания:
+    /upgrade <ID из /feed> <SSD-ГБ> <цена-₽> [RAM-ГБ], затем фото.
+    Старое объявление НЕ снимается. Цена автоподтвердится в анкете."""
     args = message.text.split()[1:]
-    if len(args) < 2:
+    if not args:
         await message.answer(
-            "Формат: /upgrade <SSD-ГБ> <цена>\n"
-            "Например: /upgrade 1024 55000 — затем пришли фото ноутбука."
+            "Формат: /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]\n"
+            "Например: /upgrade T14-31000-i5-1145G7-191204 1024 55000 32\n"
+            "ID смотри в /feed. Затем пришли фото ноутбука."
+        )
+        return
+    listing_id = args[0]
+    row = get_listing_row(listing_id)
+    if not row:
+        await message.answer(
+            f"Не нашёл в фиде «{listing_id}». Список ID: /feed"
+        )
+        return
+    if len(args) < 3:
+        await message.answer(
+            "Формат: /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]\n"
+            f"Например: /upgrade {listing_id} 1024 55000 32"
         )
         return
     try:
-        ssd = int(args[0].replace(" ", ""))
-        price = int(args[1].replace(" ", ""))
+        ssd = int(args[1].replace(" ", ""))
+        price = int(args[2].replace(" ", ""))
+        ram = int(args[3].replace(" ", "")) if len(args) > 3 else None
         if not (64 <= ssd <= 8192) or price <= 0:
+            raise ValueError
+        if ram is not None and not (4 <= ram <= 128):
             raise ValueError
     except ValueError:
         await message.answer(
-            "Не понял числа. Формат: /upgrade <SSD-ГБ> <цена>, "
-            "например /upgrade 1024 55000"
+            "Не понял числа. SSD 64–8192 ГБ, RAM 4–128 ГБ, цена — целое.\n"
+            f"Например: /upgrade {listing_id} 1024 55000 32"
         )
         return
-    UPGRADE_PENDING[message.chat.id] = {"storage_gb": str(ssd), "price": str(price)}
+
+    # Клонируем параметры из строки фида (без повторного GLM-распознавания).
+    params = {
+        "brand": row.get("Производитель", ""),
+        "model": row.get("Модель", ""),
+        "cpu": row.get("Процессор", ""),
+        "gpu": row.get("Видеокарта", ""),
+        "gpu_vram_gb": row.get("Объем видеопамяти", ""),
+        "ram_gb": row.get("Объем оперативной памяти", ""),
+        "storage_gb": row.get("Общий объем накопителей", ""),
+        "screen_size": row.get("Диагональ экрана ноутбука", ""),
+        "screen_resolution": row.get("Разрешение экрана", ""),
+        "os": row.get("Операционная система", ""),
+        "color": row.get("Цвет", ""),
+    }
+    # Частоты CPU и циклы АКБ восстанавливаем из текста описания.
+    import re as _re
+    desc = row.get("Описание объявления", "")
+    m = _re.search(r"\((\d+(?:\.\d+)?)-(\d+(?:\.\d+)?) ГГц\)", desc)
+    if m:
+        params["cpu_ghz_min"], params["cpu_ghz_max"] = m.group(1), m.group(2)
+    m = _re.search(r"Циклов АКБ: (\d+)", desc)
+    if m:
+        params["battery_cycle_count"] = m.group(1)
+    # Флаги сенсорный/трансформер — по префиксам заголовка.
+    title = row.get("Название объявления", "")
+    if title.lower().startswith("сенсорный"):
+        params["touchscreen"] = "да"
+    if "трансформер" in title.lower():
+        params["transformer"] = "да"
+
+    # Оверрайды апгрейда.
+    params["storage_gb"] = str(ssd)
+    params["price"] = str(price)
+    ram_note = ""
+    if ram:
+        params["ram_gb"] = str(ram)
+        ram_note = f", RAM {ram} ГБ"
+    UPGRADE_PENDING[message.chat.id] = {"params": params}
     await message.answer(
-        f"🆙 Режим апгрейда: SSD {ssd} ГБ, цена {price:,} ₽.".replace(",", " ")
-        + "\nПришли фото этого же ноутбука — опубликую вариант с установленным "
-        "SSD. Старое объявление не трогаю."
+        f"🆙 Апгрейд «{params['brand']} {params['model']}»:"
+        f" SSD {ssd} ГБ{ram_note}, цена {price:,} ₽.".replace(",", " ")
+        + "\nХарактеристики клонированы, распознавание не нужно — просто пришли "
+        "фото этого же ноутбука. Старое объявление не трогаю."
     )
 
 
@@ -661,7 +716,19 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
         await _progress(0, current=True)
         images = [(await _download(m), _mime_of(m)) for m in photo_messages]
         await _progress(1, current=True)
-        result = await analyze_photo(images, user_note)
+        # /upgrade: параметры уже клонированы из старого объявления — GLM
+        # не вызываем, все фото считаем фото устройства.
+        pending_upgrade = UPGRADE_PENDING.get(anchor_message.chat.id)
+        if pending_upgrade:
+            result = {
+                "parameters": pending_upgrade["params"],
+                "image_types": ["photo"] * len(images),
+                "cover_photo_index": 1,
+                "needs_clarification": False,
+            }
+            UPGRADE_PENDING.pop(anchor_message.chat.id, None)
+        else:
+            result = await analyze_photo(images, user_note)
     except Exception as e:
         logger.exception("Photo analysis failed")
         await status.edit_text(
@@ -677,18 +744,6 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             f"и/или текстом уточни:\n{questions}\n\nЗатем снова /done."
         )
         return
-
-    # Режим /upgrade: тот же ноутбук, но с установленным бОльшим SSD и новой
-    # ценой (объявление-«вариант», старое не снимается). Оверрайдим параметры
-    # после распознавания: цена автоподтвердится в анкете, SSD попадёт в
-    # карточку/описание/заголовок.
-    upgrade = UPGRADE_PENDING.pop(anchor_message.chat.id, None)
-    if upgrade:
-        params = result.setdefault("parameters", {})
-        params["storage_gb"] = upgrade["storage_gb"]
-        params["price"] = upgrade["price"]
-        logger.info("Апгрейд-вариант: SSD %s ГБ, цена %s ₽",
-                    upgrade["storage_gb"], upgrade["price"])
 
     recognized = _format_recognized(result.get("parameters", {}))
     await _progress(2, recognized=recognized)
