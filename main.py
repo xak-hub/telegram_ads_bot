@@ -25,7 +25,8 @@ import pc_sheets
 import regard_publisher
 from claude_vision import analyze_photo
 from avito_row import make_listing_id
-from avito_export import EXPORT_PATH, list_listing_ids, remove_listings, get_listing_row
+from avito_export import (EXPORT_PATH, list_listing_ids, remove_listings,
+                         get_listing_row, list_listing_rows)
 from avito_sync import sync_removed_from_avito
 from yandex_storage import download_feed
 
@@ -74,9 +75,12 @@ PHOTO_ANIM_TASKS: dict[int, asyncio.Task] = {}
 # пользователь не нажмёт одну из них. chat_id -> {"photos", "notes", "message"}.
 PENDING_MODE: dict[int, dict] = {}
 
-# /upgrade <SSD-ГБ> <цена> — ждёт фото для «варианта с установленным SSD»:
-# те же параметры, но накопитель больше и цена выше. chat_id -> {"storage_gb","price"}.
+# /upgrade — мастер «вариант с бОльшим SSD/RAM»: выбор устройства кнопками →
+# SSD → RAM → цена, популярные значения кнопками, «своё» — текстом.
+# chat_id -> {"storage_gb","price"} — финальное состояние, ждёт фото.
 UPGRADE_PENDING: dict[int, dict] = {}
+# Промежуточное состояние мастера: {"rows", "idx", "params", "awaiting"}.
+UPGRADE_FLOW: dict[int, dict] = {}
 
 
 def _mode_keyboard() -> InlineKeyboardMarkup:
@@ -138,6 +142,7 @@ async def _auto_start_later(chat_id: int, anchor_message: Message) -> None:
 async def cmd_start(message: Message):
     COLLECTING.pop(message.chat.id, None)
     UPGRADE_PENDING.pop(message.chat.id, None)
+    UPGRADE_FLOW.pop(message.chat.id, None)
     # Сбрасываем зависшие состояния предпоказа/анкеты, чтобы /start начинал чисто.
     questionnaire.PREVIEW_PENDING.pop(message.chat.id, None)
     questionnaire.SESSIONS.pop(message.chat.id, None)
@@ -279,49 +284,11 @@ async def cmd_sold(message: Message):
         )
 
 
-@dp.message(Command("upgrade"))
-async def cmd_upgrade(message: Message):
-    """Вариант ноутбука с бОльшим SSD/RAM и новой ценой — КЛОН существующего
-    объявления по ID, без повторного распознавания:
-    /upgrade <ID из /feed> <SSD-ГБ> <цена-₽> [RAM-ГБ], затем фото.
-    Старое объявление НЕ снимается. Цена автоподтвердится в анкете."""
-    args = message.text.split()[1:]
-    if not args:
-        await message.answer(
-            "Формат: /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]\n"
-            "Например: /upgrade T14-31000-i5-1145G7-191204 1024 55000 32\n"
-            "ID смотри в /feed. Затем пришли фото ноутбука."
-        )
-        return
-    listing_id = args[0]
-    row = get_listing_row(listing_id)
-    if not row:
-        await message.answer(
-            f"Не нашёл в фиде «{listing_id}». Список ID: /feed"
-        )
-        return
-    if len(args) < 3:
-        await message.answer(
-            "Формат: /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]\n"
-            f"Например: /upgrade {listing_id} 1024 55000 32"
-        )
-        return
-    try:
-        ssd = int(args[1].replace(" ", ""))
-        price = int(args[2].replace(" ", ""))
-        ram = int(args[3].replace(" ", "")) if len(args) > 3 else None
-        if not (64 <= ssd <= 8192) or price <= 0:
-            raise ValueError
-        if ram is not None and not (4 <= ram <= 128):
-            raise ValueError
-    except ValueError:
-        await message.answer(
-            "Не понял числа. SSD 64–8192 ГБ, RAM 4–128 ГБ, цена — целое.\n"
-            f"Например: /upgrade {listing_id} 1024 55000 32"
-        )
-        return
-
-    # Клонируем параметры из строки фида (без повторного GLM-распознавания).
+def _upgrade_params_from_row(row: dict) -> dict:
+    """Клонирует vision-параметры из строки фида (без GLM): основные поля из
+    колонок, частоты CPU и циклы АКБ — из текста описания, флаги
+    сенсорный/трансформер — из префиксов заголовка."""
+    import re as _re
     params = {
         "brand": row.get("Производитель", ""),
         "model": row.get("Модель", ""),
@@ -335,8 +302,6 @@ async def cmd_upgrade(message: Message):
         "os": row.get("Операционная система", ""),
         "color": row.get("Цвет", ""),
     }
-    # Частоты CPU и циклы АКБ восстанавливаем из текста описания.
-    import re as _re
     desc = row.get("Описание объявления", "")
     m = _re.search(r"\((\d+(?:\.\d+)?)-(\d+(?:\.\d+)?) ГГц\)", desc)
     if m:
@@ -344,30 +309,219 @@ async def cmd_upgrade(message: Message):
     m = _re.search(r"Циклов АКБ: (\d+)", desc)
     if m:
         params["battery_cycle_count"] = m.group(1)
-    # Флаги сенсорный/трансформер — по префиксам заголовка.
     title = row.get("Название объявления", "")
     if title.lower().startswith("сенсорный"):
         params["touchscreen"] = "да"
     if "трансформер" in title.lower():
         params["transformer"] = "да"
+    return params
 
-    # Оверрайды апгрейда.
-    params["storage_gb"] = str(ssd)
-    params["price"] = str(price)
-    ram_note = ""
-    if ram:
-        params["ram_gb"] = str(ram)
-        ram_note = f", RAM {ram} ГБ"
-    UPGRADE_PENDING[message.chat.id] = {"params": params}
+
+def _upgrade_devices_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки выбора устройства: последние объявления фида, свежие сверху."""
+    rows = list_listing_rows()
+    last = rows[-25:][::-1]  # свежие 25, последние первыми
+    buttons = []
+    for i, row in enumerate(last):
+        brand_model = f"{row.get('Производитель','')} {row.get('Модель','')}".strip() or "Ноутбук"
+        price = row.get("Цена", "")
+        label = f"{i+1}. {brand_model[:32]}"
+        if price:
+            label += f" · {price}₽"
+        buttons.append([InlineKeyboardButton(
+            text=label, callback_data=f"upg:sel:{i}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons), last
+
+
+def _upgrade_value_keyboard(kind: str, current: str) -> InlineKeyboardMarkup:
+    """Кнопки выбора SSD/RAM: популярные значения + «не менять» + «своё»."""
+    popular = ["256", "512", "1024", "2048"] if kind == "ssd" else ["8", "16", "32", "64"]
+    rows = []
+    for i in range(0, len(popular), 2):
+        rows.append([InlineKeyboardButton(
+            text=(f"{v} ГБ" + (" ✓" if v == current else "")),
+            callback_data=f"upg:{kind}:{v}") for v in popular[i:i+2]])
+    rows.append([InlineKeyboardButton(text="↩ Не менять", callback_data=f"upg:{kind}:keep")])
+    rows.append([InlineKeyboardButton(text="✍️ Своё значение", callback_data=f"upg:{kind}:custom")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _upgrade_finish(chat_id: int, message) -> None:
+    """Финал мастера: переносит параметры в UPGRADE_PENDING и просит фото."""
+    flow = UPGRADE_FLOW.pop(chat_id, None)
+    if not flow or not flow.get("params"):
+        await message.answer("Сессия апгрейда устарела — начни заново: /upgrade")
+        return
+    params = flow["params"]
+    UPGRADE_PENDING[chat_id] = {"params": params}
+    ssd = params.get("storage_gb", "?")
+    ram = params.get("ram_gb", "?")
+    price = params.get("price", "?")
     await message.answer(
-        f"🆙 Апгрейд «{params['brand']} {params['model']}»:"
-        f" SSD {ssd} ГБ{ram_note}, цена {price:,} ₽.".replace(",", " ")
-        + "\nХарактеристики клонированы, распознавание не нужно — просто пришли "
-        "фото этого же ноутбука. Старое объявление не трогаю."
+        f"🆙 Готово: «{params.get('brand','')} {params.get('model','')}» — "
+        f"SSD {ssd} ГБ, RAM {ram} ГБ, цена {price} ₽.\n"
+        "Характеристики клонированы, распознавание не нужно.\n"
+        "📷 Пришли фото этого же ноутбука — опубликую вариант.\n"
+        "Старое объявление не трогаю."
     )
 
 
+@dp.message(Command("upgrade"))
+async def cmd_upgrade(message: Message):
+    """Мастер «вариант с бОльшим SSD/RAM»: /upgrade без аргументов открывает
+    выбор устройства кнопками, далее SSD → RAM → цена (популярные значения
+    кнопками, свои — текстом). Старый синтаксис тоже работает:
+    /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]."""
+    args = message.text.split()[1:]
+    chat_id = message.chat.id
 
+    if not args:
+        kb, rows = _upgrade_devices_keyboard()
+        if not rows:
+            await message.answer("Фид пуст — нечего апгрейдить. Сначала опубликуй ноутбук.")
+            return
+        UPGRADE_FLOW[chat_id] = {"rows": rows, "idx": None, "params": None, "awaiting": None}
+        await message.answer(
+            "🆙 Апгрейд ноутбука — шаг 1 из 4: выбери устройство",
+            reply_markup=kb)
+        return
+
+    # Легаси-синтаксис: /upgrade <ID> <SSD> <цена> [RAM]
+    listing_id = args[0]
+    row = get_listing_row(listing_id)
+    if not row:
+        await message.answer(f"Не нашёл в фиде «{listing_id}». Список: /upgrade (кнопками)")
+        return
+    if len(args) < 3:
+        await message.answer(
+            f"Формат: /upgrade <ID> <SSD-ГБ> <цена> [RAM-ГБ]\n"
+            f"Например: /upgrade {listing_id} 1024 55000 32\n"
+            "Или просто /upgrade — выберу кнопками.")
+        return
+    try:
+        ssd = int(args[1]); price = int(args[2])
+        ram = int(args[3]) if len(args) > 3 else None
+        if not (64 <= ssd <= 8192) or price <= 0:
+            raise ValueError
+        if ram is not None and not (4 <= ram <= 128):
+            raise ValueError
+    except ValueError:
+        await message.answer("Не понял числа. SSD 64–8192, RAM 4–128, цена — целое.")
+        return
+    params = _upgrade_params_from_row(row)
+    params["storage_gb"] = str(ssd)
+    params["price"] = str(price)
+    if ram:
+        params["ram_gb"] = str(ram)
+    UPGRADE_PENDING[chat_id] = {"params": params}
+    await message.answer(
+        f"🆙 Апгрейд «{params['brand']} {params['model']}»: SSD {ssd} ГБ"
+        + (f", RAM {ram} ГБ" if ram else "") + f", цена {price:,} ₽.".replace(",", " ")
+        + "\n📷 Пришли фото ноутбука. Старое объявление не трогаю.")
+
+
+@dp.callback_query(F.data.startswith("upg:"))
+async def handle_upgrade_flow(callback: CallbackQuery):
+    """Кнопки мастера: выбор устройства → SSD → RAM (цена — текстом)."""
+    chat_id = callback.message.chat.id
+    flow = UPGRADE_FLOW.get(chat_id)
+    if not flow:
+        await callback.answer("Сессия устарела — /upgrade заново", show_alert=True)
+        return
+    _, step, value = callback.data.split(":", 2)
+
+    async def edit(text, kb=None):
+        try:
+            await callback.message.edit_text(text, reply_markup=kb)
+        except Exception:
+            pass
+
+    if step == "sel":
+        i = int(value)
+        row = flow["rows"][i]
+        flow["idx"] = i
+        flow["params"] = _upgrade_params_from_row(row)
+        brand_model = f"{row.get('Производитель','')} {row.get('Модель','')}".strip()
+        await edit(
+            f"🆙 Шаг 2 из 4 — {brand_model}\nВыбери новый SSD:",
+            _upgrade_value_keyboard("ssd", flow["params"].get("storage_gb", "")))
+        await callback.answer()
+
+    elif step == "ssd":
+        params = flow["params"]
+        if value == "keep":
+            await callback.answer("SSD без изменений")
+        elif value == "custom":
+            flow["awaiting"] = "ssd"
+            await edit("Напиши новый SSD в ГБ (например: 1024)")
+            await callback.answer()
+            return
+        else:
+            params["storage_gb"] = value
+            await callback.answer(f"SSD {value} ГБ")
+        await edit(
+            f"🆙 Шаг 3 из 4 — SSD {params.get('storage_gb','')} ГБ\nВыбери RAM:",
+            _upgrade_value_keyboard("ram", params.get("ram_gb", "")))
+
+    elif step == "ram":
+        params = flow["params"]
+        if value == "custom":
+            flow["awaiting"] = "ram"
+            await edit("Напиши RAM в ГБ (например: 32)")
+            await callback.answer()
+            return
+        if value != "keep":
+            params["ram_gb"] = value
+        await callback.answer(f"RAM {params.get('ram_gb','')} ГБ")
+        flow["awaiting"] = "price"
+        old_price = flow["rows"][flow["idx"]].get("Цена", "") if flow.get("idx") is not None else ""
+        hint = f" (сейчас {old_price}₽)" if old_price else ""
+        await edit(f"🆙 Шаг 4 из 4 — цена{hint}\nНапиши новую цену в ₽ (например: 55000)")
+
+
+@dp.message(F.text, F.func(lambda m: m.chat.id in UPGRADE_FLOW and UPGRADE_FLOW[m.chat.id].get("awaiting")))
+async def handle_upgrade_text(message: Message):
+    """Свои значения в мастере: SSD/RAM/цена — текстом."""
+    chat_id = message.chat.id
+    flow = UPGRADE_FLOW[chat_id]
+    awaiting = flow["awaiting"]
+    text = (message.text or "").strip().replace(" ", "")
+    if text.startswith("/"):
+        return  # команды не съедаем
+    try:
+        val = int(text)
+    except ValueError:
+        await message.answer("Нужно целое число. Попробуй ещё раз.")
+        return
+    params = flow["params"]
+
+    if awaiting == "ssd":
+        if not (64 <= val <= 8192):
+            await message.answer("SSD — от 64 до 8192 ГБ. Попробуй ещё раз.")
+            return
+        params["storage_gb"] = str(val)
+        flow["awaiting"] = None
+        await message.answer(f"SSD {val} ГБ ✓")
+        await message.answer(
+            "🆙 Шаг 3 из 4 — выбери RAM:",
+            reply_markup=_upgrade_value_keyboard("ram", params.get("ram_gb", "")))
+    elif awaiting == "ram":
+        if not (4 <= val <= 128):
+            await message.answer("RAM — от 4 до 128 ГБ. Попробуй ещё раз.")
+            return
+        params["ram_gb"] = str(val)
+        flow["awaiting"] = "price"
+        await message.answer(f"RAM {val} ГБ ✓")
+        old_price = flow["rows"][flow["idx"]].get("Цена", "") if flow.get("idx") is not None else ""
+        hint = f" (сейчас {old_price}₽)" if old_price else ""
+        await message.answer(f"🆙 Шаг 4 из 4 — цена{hint}\nНапиши новую цену в ₽")
+    elif awaiting == "price":
+        if val <= 0:
+            await message.answer("Цена — положительное число. Попробуй ещё раз.")
+            return
+        params["price"] = str(val)
+        flow["awaiting"] = None
+        await _upgrade_finish(chat_id, message)
 
 
 @dp.message(Command("regard"))

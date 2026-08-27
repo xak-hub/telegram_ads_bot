@@ -49,6 +49,29 @@ def list_listing_ids() -> list[str]:
     return ids
 
 
+def list_listing_rows() -> list[dict]:
+    """Все строки фида в виде [{колонка: значение}, ...] (в порядке строк).
+    Для UI-списков — один проход по файлу вместо поиска по ID на каждый пункт."""
+    _ensure_export_file()
+    wb = load_workbook(EXPORT_PATH)
+    ws = wb[SHEET_NAME]
+    headers = _header_map(ws)
+    id_col = headers["Уникальный идентификатор объявления"]
+    ncols = ws.max_column
+    rows = []
+    r = FIRST_DATA_ROW
+    while ws.cell(row=r, column=id_col).value:
+        row = {}
+        for c in range(1, ncols + 1):
+            h = ws.cell(row=2, column=c).value
+            v = ws.cell(row=r, column=c).value
+            if h and v not in (None, ""):
+                row[str(h)] = str(v)
+        rows.append(row)
+        r += 1
+    return rows
+
+
 def get_listing_row(listing_id: str) -> Optional[dict]:
     """Строка фида по ID в виде {название_колонки: значение} или None.
     Используется /upgrade для клонирования объявления без повторного
