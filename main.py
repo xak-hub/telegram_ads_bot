@@ -84,7 +84,7 @@ UPGRADE_PENDING: dict[int, dict] = {}
 UPGRADE_FLOW: dict[int, dict] = {}
 
 
-def _mode_keyboard() -> InlineKeyboardMarkup:
+async def _mode_keyboard() -> InlineKeyboardMarkup:
     # Каждая кнопка на своей строке — крупнее и заметнее, чем в один ряд.
     # full: фон удаляется у всех фото + карточка с характеристиками.
     # specs: карточка строится (обложка вырезается), галерея — как есть.
@@ -850,7 +850,7 @@ async def _finalize_collection(chat_id: int, message: Message):
             pass
     PROCESSING.add(chat_id)
     PENDING_MODE[chat_id] = {"photos": session["photos"], "notes": session["notes"], "message": message}
-    await message.answer("Как обработать фото?", reply_markup=_mode_keyboard())
+    await message.answer("Как обработать фото?", reply_markup=await _mode_keyboard())
 
 
 @dp.callback_query(F.data.startswith("procmode:"))
