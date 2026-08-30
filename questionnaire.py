@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message, InlineKeyboardMarkup, InlineKe
 
 from avito_options import FIELDS
 from avito_defaults import load_defaults, save_defaults
+import users
 from sheets import append_row, SPREADSHEET_ID
 from avito_export import append_listing, EXPORT_PATH
 from avito_row import make_listing_id, round_storage
@@ -470,6 +471,20 @@ async def handle_publish_decision(callback: CallbackQuery):
         pending["vision"], pending["answers"], pending["price"], pending["address"],
         pending["listing_id"], pending.get("photo_urls") or [],
     )
+
+    # Учёт для лимитов/тарифов + реферальный бонус за первое объявление.
+    try:
+        users.consume_listing(chat_id)
+        inviter = users.maybe_reward_referral(chat_id)
+        if inviter:
+            try:
+                await callback.message.bot.send_message(
+                    inviter, "🎁 Твой приглашённый опубликовал первое объявление — "
+                    "тебе начислено +5 объявлений!")
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Ошибка учёта listings/referral")
 
 
 @router.callback_query(F.data.startswith("av:"))

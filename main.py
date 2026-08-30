@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import questionnaire
+import users
 import yandex_storage
 import card_service
 import avito_api
@@ -85,9 +86,13 @@ UPGRADE_FLOW: dict[int, dict] = {}
 
 def _mode_keyboard() -> InlineKeyboardMarkup:
     # Каждая кнопка на своей строке — крупнее и заметнее, чем в один ряд.
+    # full: фон удаляется у всех фото + карточка с характеристиками.
+    # specs: карточка строится (обложка вырезается), галерея — как есть.
+    # raw: ничего не трогаем, только распознавание данных для Авито.
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Без удаления фона", callback_data="procmode:raw")],
-        [InlineKeyboardButton(text="Удаление фона + добавление инфы", callback_data="procmode:full")],
+        [InlineKeyboardButton(text="Удаление фона + карточка", callback_data="procmode:full")],
+        [InlineKeyboardButton(text="Карточка, фон не удалять", callback_data="procmode:specs")],
+        [InlineKeyboardButton(text="Без обработки (как есть)", callback_data="procmode:raw")],
     ])
 
 
@@ -146,8 +151,29 @@ async def cmd_start(message: Message):
     # Сбрасываем зависшие состояния предпоказа/анкеты, чтобы /start начинал чисто.
     questionnaire.PREVIEW_PENDING.pop(message.chat.id, None)
     questionnaire.SESSIONS.pop(message.chat.id, None)
+
+    # Кабинет: автоматическая регистрация при первом /start (анонимно).
+    username = message.from_user.username if message.from_user else ""
+    is_new = users.register_if_new(message.chat.id, username)
+    users.set_username(message.chat.id, username)
+
+    # Реферальная ссылка: /start ref_<chat_id пригласившего>.
+    referral_welcome = ""
+    args = (message.text or "").split()[1:]
+    if args and args[0].startswith("ref_"):
+        try:
+            inviter = int(args[0][4:])
+        except ValueError:
+            inviter = None
+        if inviter and inviter != message.chat.id and is_new:
+            users.link_referral(message.chat.id, inviter)
+            referral_welcome = (
+                "🎁 Пришёл по приглашению — учтено! После твоего первого "
+                "объявления пригласивший получит +5 объявлений.\n\n"
+            )
     await message.answer(
-        "Пришли фото товара — можно одно, можно несколько по очереди или пачкой. "
+        referral_welcome
+        + "Пришли фото товара — можно одно, можно несколько по очереди или пачкой. "
         "В любой момент можно дописать текстом детали, которых не видно на фото "
         "(бренд, модель, доп. характеристики) — просто напиши сообщением.\n\n"
         "Совет по качеству: обычное фото в Telegram сжимается. Если нужно "
@@ -162,8 +188,70 @@ async def cmd_start(message: Message):
         "Каждый день автоматически добавляется до 10 новых сборок.\n\n"
         "Дальше я распознаю характеристики, пришлю кнопки для заполнения оставшихся "
         "параметров и цены прямо в чате, а фото сам залью на Яндекс.Диск "
-        "и запишу всё в Google Sheets и файл для Avito."
+        "и запишу всё в Google Sheets и файл для Avito.\n\n"
+        f"Твой тариф: Free ({users.LIMITS['free']} объявлений в месяц). "
+        "Тарифы и апгрейд: /tariff. Кабинет: /profile. Справка: /help."
     )
+
+
+@dp.message(Command("profile"))
+async def cmd_profile(message: Message):
+    """Кабинет: тариф, израсходовано/лимит, бонусы, реферальная ссылка."""
+    chat_id = message.chat.id
+    users.register_if_new(chat_id, message.from_user.username if message.from_user else "")
+    u = users.get_user(chat_id)
+    users._ensure_month(u)
+    u = users.get_user(chat_id)
+    tariff = users._effective_tariff(u)
+    if tariff == "free":
+        limit = users.LIMITS["free"]
+        used = min(u["listings_count"], limit)
+        remain = max(0, limit + u["bonus_listings"] - used)
+        tariff_line = f"Тариф: Free ({used}/{limit + u['bonus_listings']} объявлений в месяце, осталось {remain})"
+    else:
+        used = u["listings_count"]
+        bonus = u["bonus_listings"]
+        tariff_line = f"Тариф: {tariff.capitalize()} ({used} объявлений в месяце" + (f", бонусов: {bonus}" if bonus else "") + ")"
+        if u["tariff_until"]:
+            tariff_line += f", действует до {u['tariff_until']}"
+    reg = (u["registered_at"] or "")[:10]
+
+    me = await message.bot.me()
+    ref_link = f"https://t.me/{me.username}?start=ref_{chat_id}"
+    await message.answer(
+        "👤 Личный кабинет\n\n"
+        f"{tariff_line}\n"
+        f"С нами с: {reg}\n\n"
+        f"🎁 Приведи друга — получи +5 объявлений:\n{ref_link}\n\n"
+        "Тарифы: /tariff · Справка: /help"
+    )
+
+
+@dp.message(Command("tariff"))
+async def cmd_tariff(message: Message):
+    """Тарифная сетка + кнопки выбора (оплата подключается отдельным этапом)."""
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Start — 290₽/мес (30 об.)", callback_data="tar:start")],
+        [InlineKeyboardButton(text="Pro — 690₽/мес (100 об.)", callback_data="tar:pro")],
+        [InlineKeyboardButton(text="Business — 1990₽/мес (500 об.)", callback_data="tar:business")],
+        [InlineKeyboardButton(text="Годовые: −25% (Start 2610₽ · Pro 6210₽ · Biz 5965₽)", callback_data="tar:yearly_info")],
+    ])
+    await message.answer(
+        "💳 Тарифы\n\n"
+        "Free — 5 объявлений/мес, бесплатно.\n"
+        "Start — 290₽/мес, 30 объявлений.\n"
+        "Pro — 690₽/мес, 100 объявлений.\n"
+        "Business — 1990₽/мес, 500 объявлений.\n\n"
+        "Выбери тариф:", reply_markup=kb)
+
+
+@dp.callback_query(F.data.startswith("tar:"))
+async def handle_tariff_choice(callback: CallbackQuery):
+    kind = callback.data.split(":", 1)[1]
+    await callback.answer()
+    await callback.message.answer(
+        "💳 Приём оплат подключается отдельным этапом (Telegram Stars / ЮKassa).\n"
+        "Твой выбор зафиксирован: " + kind + " — сообщу, как оплата заработает.")
 
 
 @dp.message(Command("help"))
@@ -807,6 +895,11 @@ async def _send_photo_album(chat_id: int, items: list[tuple[bytes, str]]) -> Non
 
 async def _process_listing(anchor_message: Message, photo_messages: list[Message], user_note: str,
                            mode: str = "full"):
+    # Лимит Free-тарифа: проверка ДО тяжёлой обработки (GLM/Bria/GPU).
+    allowed, reason, _remain = users.check_allowance(anchor_message.chat.id)
+    if not allowed:
+        await anchor_message.answer(reason)
+        return
     status = await anchor_message.answer("⏳ Обработка...\n   [ ] Скачиваю фото\n   [ ] Распознавание...\n   [ ] Убираю фон\n   [ ] Собираю карточку")
 
     def _format_recognized(p: dict) -> list[str]:
@@ -920,6 +1013,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     # детектор ошибались и удаляли ценные кадры. Вырезаем каждое фото один
     # раз и переиспользуем cutout для галереи и карточки (без повторной
     # вырезки). Обрезанность только логируем, для статистики.
+    # specs: вырезаем ТОЛЬКО обложку (для карточки), галерея — как есть.
     cutouts: dict[tuple[bytes, str], Optional[bytes]] = {}
     if mode == "full":
         await _progress(2, current=True, extra="подготовка фото", recognized=recognized)
@@ -928,6 +1022,20 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
             cutouts[photo] = cut
             if cut and card_service.is_cropped_by_frame(cut):
                 logger.info("Статистика: фото обрезано кадром (в объявлении остаётся)")
+    elif mode == "specs":
+        await _progress(2, current=True, extra="вырезка обложки", recognized=recognized)
+        # Определяем обложку заранее (нужна только она).
+        _cp = None
+        _ci = result.get("cover_photo_index")
+        if isinstance(_ci, int) and 1 <= _ci <= len(images):
+            _cand = images[_ci - 1]
+            if _cand in device_photos:
+                _cp = _cand
+        if _cp is None and device_photos:
+            _cp = device_photos[0]
+        if _cp:
+            cut = await card_service._remove_bg(_cp[0], _cp[1])
+            cutouts[_cp] = cut
 
     # Обложка — лучший презентационный кадр по выбору GLM (валиден, только
     # если это фото устройства, не скриншот); иначе первое фото устройства.
@@ -947,7 +1055,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     listing_photos: list[tuple[bytes, str]] = []
     try:
         await _progress(3, current=True, extra=f"{len(device_photos)} фото", recognized=recognized)
-        if mode == "full":
+        if mode in ("full", "specs"):
             for photo in device_photos:
                 cut = cutouts.get(photo)
                 composed = await card_service.compose_listing_from_cutout(cut) if cut else None
@@ -970,7 +1078,7 @@ async def _process_listing(anchor_message: Message, photo_messages: list[Message
     # выбранного фото (cover_photo), рисуем карточку и ставим её главным
     # (первым) фото объявления. Если не вышло — идём с обычными фото.
     card_bytes = None
-    if mode == "full":
+    if mode in ("full", "specs"):
         try:
             if cover_photo:
                 await _progress(4, current=True, recognized=recognized)
@@ -1066,7 +1174,11 @@ async def _sync_loop():
 
 
 async def _regard_loop():
-    """Раз в сутки добавляет топовые сборки Регарда в фид системных блоков."""
+    """Раз в сутки добавляет топовые сборки Регарда в фид системных блоков.
+    REGARD_DAILY_LIMIT=0 полностью отключает цикл."""
+    if REGARD_DAILY_LIMIT <= 0:
+        logger.info("Дневная публикация Регарда ОТКЛЮЧЕНА (REGARD_DAILY_LIMIT=0)")
+        return
     await asyncio.sleep(REGARD_FIRST_RUN_DELAY)
     while True:
         try:
@@ -1081,6 +1193,7 @@ async def _regard_loop():
 
 
 async def main():
+    users.init_db()  # SQLite кабинет пользователей
     try:
         restored = await download_feed(EXPORT_PATH)
         logger.info(
@@ -1093,17 +1206,18 @@ async def main():
             "продолжаю с тем, что есть локально"
         )
 
-    try:
-        restored_pc = await download_feed(pc_feed.EXPORT_PATH, yandex_storage.PC_OBJECT_KEY)
-        logger.info(
-            "avito_export_pc.xlsx восстановлен из Yandex Storage" if restored_pc
-            else "ПК-фида в Yandex Storage ещё нет — начнём с шаблона при первой сборке"
-        )
-    except Exception:
-        logger.exception(
-            "Не удалось подтянуть avito_export_pc.xlsx из Yandex Storage — "
-            "продолжаю с тем, что есть локально"
-        )
+    if REGARD_DAILY_LIMIT > 0:
+        try:
+            restored_pc = await download_feed(pc_feed.EXPORT_PATH, yandex_storage.PC_OBJECT_KEY)
+            logger.info(
+                "avito_export_pc.xlsx восстановлен из Yandex Storage" if restored_pc
+                else "ПК-фида в Yandex Storage ещё нет — начнём с шаблона при первой сборке"
+            )
+        except Exception:
+            logger.exception(
+                "Не удалось подтянуть avito_export_pc.xlsx из Yandex Storage — "
+                "продолжаю с тем, что есть локально"
+            )
 
     if avito_api.is_configured() and SYNC_INTERVAL > 0:
         asyncio.create_task(_sync_loop())
@@ -1115,10 +1229,6 @@ async def main():
         )
 
     asyncio.create_task(_regard_loop())
-    logger.info(
-        "Дневная публикация сборок Регарда включена: до %d новых сборок в сутки "
-        "(первый запуск через %d сек)", REGARD_DAILY_LIMIT, REGARD_FIRST_RUN_DELAY,
-    )
     if pc_sheets.is_configured():
         # Таблицу могли настроить уже после первых публикаций — догоняем её фидом.
         asyncio.create_task(pc_sheets.sync_all_from_feed())
